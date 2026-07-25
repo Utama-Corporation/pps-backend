@@ -446,7 +446,11 @@ ${lokasiWhere};
       ...(r.DateCreate && { DateCreate: formatDate(r.DateCreate) }),
     };
 
-    if (["furniturewip", "barangjadi"].includes((r.KodeKategori || "").toLowerCase())) {
+    if (
+      ["furniturewip", "barangjadi"].includes(
+        (r.KodeKategori || "").toLowerCase(),
+      )
+    ) {
       delete item.Berat;
     }
 
@@ -458,7 +462,9 @@ ${lokasiWhere};
   const totalBerat = sumResult.recordset[0]?.TotalBerat || 0;
 
   const kategoriKey = (kategori || "").toLowerCase();
-  const kategoriLabel = kategori ? (KATEGORI_LABELS[kategoriKey] || kategori) : "semua";
+  const kategoriLabel = kategori
+    ? KATEGORI_LABELS[kategoriKey] || kategori
+    : "semua";
 
   return {
     // ✅ metadata baru (lebih ramah UI)
@@ -656,6 +662,9 @@ function getAvailabilityCheckSQL(prefix, tableName) {
 // =====================
 // UPDATE lokasi + validasi ketersediaan (DateUsage)
 // =====================
+// TODO: aktifkan kembali precondition kategori/jenis (MstLokasiJenis) setelah data master siap.
+const ENABLE_KATEGORI_JENIS_PRECONDITION = false;
+
 async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   const pool = await poolPromise;
 
@@ -667,11 +676,19 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   // Validasi minimal
   const idLokasiInt = toIntOrNull(idLokasi);
   if (idLokasiInt === null) {
-    return { success: false, code: "VALIDATION_ERROR", message: "idLokasi wajib angka (INT)" };
+    return {
+      success: false,
+      code: "VALIDATION_ERROR",
+      message: "idLokasi wajib angka (INT)",
+    };
   }
   const blokNorm = normBlok(blok);
   if (!blokNorm) {
-    return { success: false, code: "VALIDATION_ERROR", message: "blok wajib diisi" };
+    return {
+      success: false,
+      code: "VALIDATION_ERROR",
+      message: "blok wajib diisi",
+    };
   }
 
   // Normalisasi prefix
@@ -746,7 +763,11 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   const available = !!availRes.recordset[0].Available;
 
   if (!available) {
-    return { success: false, code: "ALREADY_USED", message: `Label ${labelCode} sudah terpakai!` };
+    return {
+      success: false,
+      code: "ALREADY_USED",
+      message: `Label ${labelCode} sudah terpakai!`,
+    };
   }
 
   // ========= 1.5) GUARD: jika tidak ada perubahan, hentikan di sini =========
@@ -770,68 +791,69 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
     };
   }
 
-  // ========= 1.6) PRECONDITION: kategori/jenis label harus terdaftar di MstLokasiJenis lokasi tujuan =========
-  const isSafeSqlIdentifier = (v) =>
-    /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(v || "").trim());
+  if (ENABLE_KATEGORI_JENIS_PRECONDITION) {
+    // ========= 1.6) PRECONDITION: kategori/jenis label harus terdaftar di MstLokasiJenis lokasi tujuan =========
+    const isSafeSqlIdentifier = (v) =>
+      /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(v || "").trim());
 
-  const kategoriPrefix = prefix === "AB" ? "A" : prefix;
-  const kategoriRes = await pool
-    .request()
-    .input("Prefix", sql.VarChar(20), kategoriPrefix)
-    .query(`
-      SELECT TOP 1 IdKategori, NamaKolomIdJenisDiLabel
-      FROM dbo.MstKategori WITH (NOLOCK)
-      WHERE REPLACE(UPPER(PrefixLabel), '.', '') = UPPER(@Prefix)
-        AND ISNULL(Enable, 1) = 1;
-    `);
+    const kategoriPrefix = prefix === "AB" ? "A" : prefix;
+    const kategoriRes = await pool
+      .request()
+      .input("Prefix", sql.VarChar(20), kategoriPrefix).query(`
+        SELECT TOP 1 IdKategori, NamaKolomIdJenisDiLabel
+        FROM dbo.MstKategori WITH (NOLOCK)
+        WHERE REPLACE(UPPER(PrefixLabel), '.', '') = UPPER(@Prefix)
+          AND ISNULL(Enable, 1) = 1;
+      `);
 
-  const kategori = kategoriRes.recordset?.[0] || null;
-  const jenisCol = kategori ? String(kategori.NamaKolomIdJenisDiLabel || "").trim() : "";
-  if (!kategori || !isSafeSqlIdentifier(jenisCol)) {
-    return {
-      success: false,
-      code: "CONFIG_ERROR",
-      message: `Kategori untuk label ${labelCode} tidak ditemukan/terkonfigurasi di MstKategori`,
-    };
-  }
+    const kategori = kategoriRes.recordset?.[0] || null;
+    const jenisCol = kategori
+      ? String(kategori.NamaKolomIdJenisDiLabel || "").trim()
+      : "";
+    if (!kategori || !isSafeSqlIdentifier(jenisCol)) {
+      return {
+        success: false,
+        code: "CONFIG_ERROR",
+        message: `Kategori untuk label ${labelCode} tidak ditemukan/terkonfigurasi di MstKategori`,
+      };
+    }
 
-  const jenisRes = await pool
-    .request()
-    .input("LabelCode", sql.NVarChar(50), labelCode)
-    .query(`
-      SELECT TOP 1 ${jenisCol} AS IdJenis
-      FROM ${tableName}
-      WHERE ${labelCol} = @LabelCode;
-    `);
+    const jenisRes = await pool
+      .request()
+      .input("LabelCode", sql.NVarChar(50), labelCode).query(`
+        SELECT TOP 1 ${jenisCol} AS IdJenis
+        FROM ${tableName}
+        WHERE ${labelCol} = @LabelCode;
+      `);
 
-  const idJenisLabel = toIntOrNull(jenisRes.recordset?.[0]?.IdJenis);
-  if (idJenisLabel === null) {
-    return {
-      success: false,
-      code: "CONFIG_ERROR",
-      message: `Jenis label ${labelCode} tidak dapat ditentukan`,
-    };
-  }
+    const idJenisLabel = toIntOrNull(jenisRes.recordset?.[0]?.IdJenis);
+    if (idJenisLabel === null) {
+      return {
+        success: false,
+        code: "CONFIG_ERROR",
+        message: `Jenis label ${labelCode} tidak dapat ditentukan`,
+      };
+    }
 
-  const lokasiJenisRes = await pool
-    .request()
-    .input("Blok", sql.VarChar(100), blokNorm)
-    .input("IdLokasi", sql.Int, idLokasiInt)
-    .input("IdKategori", sql.Int, kategori.IdKategori)
-    .input("IdJenis", sql.Int, idJenisLabel)
-    .query(`
-      SELECT TOP 1 1 AS Found
-      FROM dbo.MstLokasiJenis
-      WHERE Blok = @Blok AND IdLokasi = @IdLokasi
-        AND IdKategori = @IdKategori AND IdJenis = @IdJenis;
-    `);
+    const lokasiJenisRes = await pool
+      .request()
+      .input("Blok", sql.VarChar(100), blokNorm)
+      .input("IdLokasi", sql.Int, idLokasiInt)
+      .input("IdKategori", sql.Int, kategori.IdKategori)
+      .input("IdJenis", sql.Int, idJenisLabel).query(`
+        SELECT TOP 1 1 AS Found
+        FROM dbo.MstLokasiJenis
+        WHERE Blok = @Blok AND IdLokasi = @IdLokasi
+          AND IdKategori = @IdKategori AND IdJenis = @IdJenis;
+      `);
 
-  if (!lokasiJenisRes.recordset.length) {
-    return {
-      success: false,
-      code: "LOKASI_NOT_ALLOWED",
-      message: `Lokasi ${blokNorm}${idLokasiInt} tidak diizinkan untuk kategori/jenis label ${labelCode}`,
-    };
+    if (!lokasiJenisRes.recordset.length) {
+      return {
+        success: false,
+        code: "LOKASI_NOT_ALLOWED",
+        message: `Lokasi ${blokNorm}${idLokasiInt} tidak diizinkan untuk kategori/jenis label ${labelCode}`,
+      };
+    }
   }
 
   // ========= 2) UPDATE lokasi (IdLokasi INT selalu) =========
@@ -872,7 +894,13 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   };
 }
 
-async function getAllLabelsV2(page = 1, limit = 50, kategori = null, idlokasi = null, blok = null) {
+async function getAllLabelsV2(
+  page = 1,
+  limit = 50,
+  kategori = null,
+  idlokasi = null,
+  blok = null,
+) {
   const pool = await poolPromise;
   const offset = (page - 1) * limit;
 
@@ -911,10 +939,13 @@ async function getAllLabelsV2(page = 1, limit = 50, kategori = null, idlokasi = 
     const jenisIdCol = escapeId(kat.NamaKolomIdJenis);
     const jenisNameCol = escapeId(kat.NamaKolomNamaJenis);
     const jenisIdDiLabel = escapeId(kat.NamaKolomIdJenisDiLabel);
-    const hasJenis = Boolean(jenisTbl && jenisIdCol && jenisNameCol && jenisIdDiLabel);
+    const hasJenis = Boolean(
+      jenisTbl && jenisIdCol && jenisNameCol && jenisIdDiLabel,
+    );
 
     function jenisJoin(alias) {
-      if (!hasJenis) return { join: "", select: ", NULL AS IdJenis, NULL AS NamaJenis" };
+      if (!hasJenis)
+        return { join: "", select: ", NULL AS IdJenis, NULL AS NamaJenis" };
       return {
         join: ` LEFT JOIN [dbo].[${jenisTbl}] j ON j.${jenisIdCol} = ${alias}.${jenisIdDiLabel}`,
         select: `, ${alias}.${jenisIdDiLabel} AS IdJenis, j.${jenisNameCol} AS NamaJenis`,

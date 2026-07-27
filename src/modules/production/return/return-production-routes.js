@@ -37,4 +37,18 @@ router.get(
   returnController.getOutputsBarangJadiByNoRetur,
 );
 
+// GET /api/production/return/import-as-gsu/:date - fetch data from AS_GSU
+router.get(
+  "/return/import-as-gsu/:date(\\d{4}-\\d{2}-\\d{2})",
+  verifyToken,
+  returnController.getImportAsGsuByDate,
+);
+
+// POST /api/production/return/import-as-gsu - import selected items
+router.post(
+  "/return/import-as-gsu",
+  verifyToken,
+  returnController.importAsGsu,
+);
+
 module.exports = router;

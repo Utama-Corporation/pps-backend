@@ -241,6 +241,49 @@ async function getOutputsBarangJadiByNoRetur(req, res) {
 }
 
 
+async function getImportAsGsuByDate(req, res) {
+  const date = req.params.date;
+  try {
+    const data = await returnService.fetchImportAsGsuByDate(date);
+    return res.status(200).json({
+      success: true,
+      message: `AS_GSU data for ${date} retrieved`,
+      totalData: data.length,
+      data,
+    });
+  } catch (error) {
+    console.error("[return.getImportAsGsuByDate]", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message,
+    });
+  }
+}
+
+async function importAsGsu(req, res) {
+  try {
+    const username = req.username || req.user?.username || 'system';
+    const { date, items } = req.body || {};
+    if (!date || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, message: 'date and items[] required' });
+    }
+    const result = await returnService.executeImportAsGsu(date, items, username);
+    return res.status(201).json({
+      success: true,
+      message: 'Import AS_GSU completed',
+      data: result,
+    });
+  } catch (error) {
+    console.error("[return.importAsGsu]", error);
+    const status = error.statusCode || 500;
+    return res.status(status).json({
+      success: false,
+      message: error.message || 'Internal Error',
+    });
+  }
+}
+
 module.exports = {
   getAllReturns,
   getReturnsByDate,
@@ -249,4 +292,6 @@ module.exports = {
   deleteReturn,
   getOutputsFurnitureWipByNoRetur,
   getOutputsBarangJadiByNoRetur,
+  getImportAsGsuByDate,
+  importAsGsu,
 };

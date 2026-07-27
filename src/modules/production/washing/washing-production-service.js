@@ -17,6 +17,7 @@ const {
   notFound,
 } = require("../../../core/utils/http-error");
 const { applyAuditContext } = require("../../../core/utils/db-audit-context");
+const { getIo } = require("../../../core/utils/socket-instance");
 const {
   getFormulaInputsByCategory,
 } = require("../../../core/shared/production-formula.service");
@@ -1196,16 +1197,18 @@ async function completeWashingProduksi(noProduksi, ctx) {
       sql.VarChar(50),
       no,
     ).query(`
-        SELECT TOP 1 NoProduksi, IsComplete
-        FROM dbo.WashingProduksi_h WITH (UPDLOCK, HOLDLOCK)
-        WHERE NoProduksi = @NoProduksi;
+        SELECT TOP 1 h.NoProduksi, h.IsComplete, h.TglProduksi, jp.Jenis AS OutputJenisNama
+        FROM dbo.WashingProduksi_h h WITH (UPDLOCK, HOLDLOCK)
+        LEFT JOIN dbo.MstJenisPlastik jp WITH (NOLOCK) ON jp.IdJenisPlastik = h.OutputJenisId
+        WHERE h.NoProduksi = @NoProduksi;
       `);
 
     if (!checkRes.recordset?.length) {
       throw notFound(`NoProduksi tidak ditemukan: ${no}`);
     }
 
-    if (checkRes.recordset[0].IsComplete) {
+    const row = checkRes.recordset[0];
+    if (row.IsComplete) {
       throw conflict(`Produksi ${no} sudah complete.`);
     }
 
@@ -1216,6 +1219,24 @@ async function completeWashingProduksi(noProduksi, ctx) {
       `);
 
     await tx.commit();
+
+    const completedAt = new Date().toISOString();
+
+    try {
+      const io = getIo();
+      if (io) {
+        io.emit("production_need_verification", {
+          jenisProduksi: "washing",
+          noProduksi: no,
+          tglProduksi: row.TglProduksi,
+          outputJenisNama: row.OutputJenisNama ?? null,
+          completedBy: actorUsername,
+          completedAt,
+        });
+      }
+    } catch (emitErr) {
+      console.error("[washing.completeWashingProduksi] emit failed", emitErr);
+    }
 
     return {
       noProduksi: no,

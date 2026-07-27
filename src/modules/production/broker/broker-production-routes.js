@@ -30,6 +30,18 @@ router.patch(
   brokerProduksiController.completeProduksi,
 );
 
+router.patch(
+  "/broker/:noProduksi/verify",
+  verifyToken,
+  brokerProduksiController.verifyProduksi,
+);
+
+router.patch(
+  "/broker/:noProduksi/unverify",
+  verifyToken,
+  brokerProduksiController.unverifyProduksi,
+);
+
 // ✅ Update by NoProduksi
 router.put(
   "/broker/:noProduksi",

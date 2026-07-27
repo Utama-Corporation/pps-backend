@@ -464,6 +464,192 @@ async function fetchOutputsFurnitureWip(noRetur) {
   return rs.recordset || [];
 }
 
+async function fetchImportAsGsuByDate(date) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("date", sql.Date, date);
+
+  const query = `
+    SELECT
+      A.InvoiceNumber,
+      A.InvoiceType,
+      A.ItemName,
+      A.StockCategoryName,
+      A.ItemCode,
+      SUM(A.Quantity) AS Quantity,
+      A.CODE,
+      A.SumberCode,
+      A.CustomerName,
+      A.IdPembeli
+    FROM (
+      SELECT
+        B.InvoiceNumber,
+        B.InvoiceType,
+        C.ItemName,
+        D.StockCategoryName,
+        C.ItemCode,
+        A.Quantity,
+        B.InvoiceDate,
+        COALESCE(E.IDBJ, F.IDCABINETWIP, G.IDCABINETMATERIAL) AS CODE,
+        CASE
+          WHEN E.ItemCode IS NOT NULL THEN 'BARANG JADI'
+          WHEN F.ItemCode IS NOT NULL THEN 'WORK IN PROGRESS'
+          WHEN G.ItemCode IS NOT NULL THEN 'BAHAN PENDUKUNG'
+          ELSE 'Tidak Ada'
+        END AS SumberCode,
+        H.CustomerName,
+        I.IdPembeli
+      FROM AS_GSU.DBO.AR_InvoiceDetails A
+      LEFT JOIN AS_GSU.DBO.AR_Invoices B ON B.InvoiceID = A.InvoiceID
+      LEFT JOIN AS_GSU.DBO.IC_ITEMS C ON C.ItemID = A.ItemID
+      LEFT JOIN AS_GSU.DBO.IC_StockCategories D ON D.StockCategoryID = C.CategoryID
+      LEFT JOIN MstBarangJadi E ON E.ItemCode = C.ItemCode
+      LEFT JOIN MstCabinetWIP F ON F.ItemCode = C.ItemCode
+      LEFT JOIN MstCabinetMaterial G ON G.ItemCode = C.ItemCode
+      LEFT JOIN AS_GSU.dbo.AR_Customers H ON H.CustomerID = B.CustomerID
+      LEFT JOIN MstPembeli I ON I.CustomerCode = H.CustomerCode
+      WHERE IsInvoice = 0
+        AND CONVERT(date, B.InvoiceDate) = @date
+        AND B.Void = 0
+    ) A
+    GROUP BY
+      A.InvoiceNumber, A.InvoiceType, A.ItemName, A.StockCategoryName, A.ItemCode,
+      A.CODE, A.SumberCode, A.CustomerName, A.IdPembeli
+    ORDER BY A.InvoiceNumber, A.ItemName
+  `;
+
+  const result = await req.query(query);
+  return result.recordset || [];
+}
+
+async function executeImportAsGsu(date, items, username) {
+  if (!items || items.length === 0) throw badReq("No items to import");
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+  try {
+    const importedBJ = [];
+    const importedFWIP = [];
+    const headers = [];
+
+    // Group by InvoiceNumber
+    const groups = new Map();
+    for (const item of items) {
+      const key = item.InvoiceNumber || '(no invoice)';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(item);
+    }
+
+    for (const [invoice, grpItems] of groups.entries()) {
+      const firstItem = grpItems[0];
+
+      // Generate NoRetur
+      const noReturRq = new sql.Request(tx);
+      const noReturRes = await noReturRq.query(`
+        SELECT 'L.' + FORMAT(ISNULL(MAX(RIGHT(NoRetur, 10)), 0) + 1, '0000000000') AS NoRetur
+        FROM dbo.BJRetur_h
+      `);
+      const noRetur = noReturRes.recordset[0].NoRetur;
+
+      // Insert BJRetur_h header
+      const idPembeli = parseInt(firstItem.IdPembeli, 10) || 0;
+      const hdrRq = new sql.Request(tx);
+      await hdrRq
+        .input('NoRetur', sql.VarChar(50), noRetur)
+        .input('Invoice', sql.VarChar(100), invoice)
+        .input('Tanggal', sql.Date, date)
+        .input('IdPembeli', sql.Int, idPembeli)
+        .input('idWarehouse', sql.Int, 4)
+        .query(`
+          INSERT INTO dbo.BJRetur_h (NoRetur, Invoice, Tanggal, IdPembeli, idWarehouse)
+          VALUES (@NoRetur, @Invoice, @Tanggal, @IdPembeli, @idWarehouse)
+        `);
+
+      headers.push({ NoRetur: noRetur, Invoice: invoice, IdPembeli: idPembeli });
+
+      for (const item of grpItems) {
+        const sumberCode = item.SumberCode;
+        const code = item.CODE;
+        const quantity = item.Quantity;
+
+        if (sumberCode === 'BARANG JADI' && code) {
+          const seqRq = new sql.Request(tx);
+          const bjRes = await seqRq.query(`
+            SELECT ISNULL(MAX(CAST(RIGHT(NoBJ, 10) AS BIGINT)), 0) + 1 AS NextNo
+            FROM dbo.BarangJadi
+          `);
+          const nextSeq = bjRes.recordset[0].NextNo;
+          const noBJ = 'BA.' + String(nextSeq).padStart(10, '0');
+          const idBJ = parseInt(code, 10);
+
+          const insRq = new sql.Request(tx);
+          await insRq
+            .input('NoBJ', sql.VarChar(50), noBJ)
+            .input('IdBJ', sql.Int, idBJ)
+            .input('DateCreate', sql.Date, date)
+            .input('Pcs', sql.Int, quantity)
+            .input('CreateBy', sql.VarChar(50), username)
+            .query(`
+              INSERT INTO dbo.BarangJadi (NoBJ, IdBJ, DateCreate, Jam, Pcs, CreateBy, DateTimeCreate)
+              VALUES (@NoBJ, @IdBJ, @DateCreate, CONVERT(TIME, GETDATE()), @Pcs, @CreateBy, GETDATE())
+            `);
+
+          const detRq = new sql.Request(tx);
+          await detRq
+            .input('NoBJ', sql.VarChar(50), noBJ)
+            .input('NoRetur', sql.VarChar(50), noRetur)
+            .query(`
+              INSERT INTO dbo.BJReturBarangJadi_d (NoRetur, NoBJ)
+              VALUES (@NoRetur, @NoBJ)
+            `);
+
+          importedBJ.push({ NoBJ: noBJ, IdBJ: idBJ, Pcs: quantity, NoRetur: noRetur });
+        }
+
+        if (sumberCode === 'WORK IN PROGRESS' && code) {
+          const seqRq = new sql.Request(tx);
+          const fwipRes = await seqRq.query(`
+            SELECT ISNULL(MAX(CAST(RIGHT(NoFurnitureWIP, 10) AS BIGINT)), 0) + 1 AS NextNo
+            FROM dbo.FurnitureWIP
+          `);
+          const nextSeq = fwipRes.recordset[0].NextNo;
+          const noFWIP = 'BB.' + String(nextSeq).padStart(10, '0');
+          const idFWIP = parseInt(code, 10);
+
+          const insRq = new sql.Request(tx);
+          await insRq
+            .input('NoFurnitureWIP', sql.VarChar(50), noFWIP)
+            .input('IdFurnitureWIP', sql.Int, idFWIP)
+            .input('DateCreate', sql.Date, date)
+            .input('Pcs', sql.Int, quantity)
+            .input('CreateBy', sql.VarChar(50), username)
+            .query(`
+              INSERT INTO dbo.FurnitureWIP (NoFurnitureWIP, IDFurnitureWIP, DateCreate, Pcs, CreateBy, DateTimeCreate)
+              VALUES (@NoFurnitureWIP, @IdFurnitureWIP, @DateCreate, @Pcs, @CreateBy, GETDATE())
+            `);
+
+          const detRq = new sql.Request(tx);
+          await detRq
+            .input('NoFurnitureWIP', sql.VarChar(50), noFWIP)
+            .input('NoRetur', sql.VarChar(50), noRetur)
+            .query(`
+              INSERT INTO dbo.BJReturFurnitureWIP_d (NoRetur, NoFurnitureWIP)
+              VALUES (@NoRetur, @NoFurnitureWIP)
+            `);
+
+          importedFWIP.push({ NoFurnitureWIP: noFWIP, IDFurnitureWIP: idFWIP, Pcs: quantity, NoRetur: noRetur });
+        }
+      }
+    }
+
+    await tx.commit();
+    return { headers, importedBJ, importedFWIP };
+  } catch (e) {
+    try { await tx.rollback(); } catch (_) {}
+    throw e;
+  }
+}
+
 async function fetchOutputsBarangJadi(noRetur) {
   const pool = await poolPromise;
   const req = pool.request();
@@ -493,4 +679,6 @@ module.exports = {
   deleteReturn,
   fetchOutputsFurnitureWip,
   fetchOutputsBarangJadi,
+  fetchImportAsGsuByDate,
+  executeImportAsGsu,
 };

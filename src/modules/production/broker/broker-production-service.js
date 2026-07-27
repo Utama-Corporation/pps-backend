@@ -239,8 +239,7 @@ async function getAllProduksi(
   return { data: rows, total };
 }
 
-// fetchInputs(): main items + partial items (with full keys) in SAME list
-async function fetchInputs(noProduksi) {
+async function queryRawInputs(noProduksi) {
   const pool = await poolPromise;
   const req = pool.request();
   req.input("no", sql.VarChar(50), noProduksi);
@@ -469,12 +468,20 @@ async function fetchInputs(noProduksi) {
 
   const rs = await req.query(q);
 
-  const mainRows = rs.recordsets?.[0] || [];
-  const bbPart = rs.recordsets?.[1] || [];
-  const gilPart = rs.recordsets?.[2] || [];
-  const mixPart = rs.recordsets?.[3] || [];
-  const rejPart = rs.recordsets?.[4] || [];
-  const brkPart = rs.recordsets?.[5] || []; // ⬅️ TAMBAHKAN
+  return {
+    mainRows: rs.recordsets?.[0] || [],
+    bbPart: rs.recordsets?.[1] || [],
+    gilPart: rs.recordsets?.[2] || [],
+    mixPart: rs.recordsets?.[3] || [],
+    rejPart: rs.recordsets?.[4] || [],
+    brkPart: rs.recordsets?.[5] || [],
+  };
+}
+
+// fetchInputs(): main items + partial items (with full keys) in SAME list
+async function fetchInputs(noProduksi) {
+  const { mainRows, bbPart, gilPart, mixPart, rejPart, brkPart } =
+    await queryRawInputs(noProduksi);
 
   const out = {
     broker: [],
@@ -597,6 +604,212 @@ async function fetchInputs(noProduksi) {
   return out;
 }
 
+/**
+ * Sama seperti fetchInputs, tapi digrup per label (mirip shape fetchOutputs:
+ * header + DetailSak[]) supaya frontend tidak perlu grouping manual lagi.
+ */
+async function fetchInputsV2(noProduksi) {
+  const { mainRows, bbPart, gilPart, mixPart, rejPart, brkPart } =
+    await queryRawInputs(noProduksi);
+
+  const brokerMap = new Map();
+  const bbMap = new Map();
+  const washingMap = new Map();
+  const crusherMap = new Map();
+  const gilinganMap = new Map();
+  const mixerMap = new Map();
+  const rejectMap = new Map();
+
+  const ensure = (map, key, header) => {
+    if (!map.has(key)) map.set(key, { ...header, DetailSak: [] });
+    return map.get(key);
+  };
+
+  // ===================== MAIN ROWS =====================
+  for (const r of mainRows) {
+    switch (r.Src) {
+      case "broker":
+        ensure(brokerMap, r.Ref1, {
+          NoProduksi: r.NoProduksi,
+          NoBroker: r.Ref1,
+          IdJenis: r.IdJenis ?? null,
+          NamaJenis: r.NamaJenis ?? null,
+        }).DetailSak.push({
+          NoSak: r.Ref2 ?? null,
+          NoBrokerPartial: null,
+          Berat: r.Berat ?? null,
+          BeratAct: r.BeratAct ?? null,
+          IsPartial: r.IsPartial ?? null,
+        });
+        break;
+      case "bb":
+        ensure(bbMap, `${r.Ref1}::${r.Ref2}`, {
+          NoProduksi: r.NoProduksi,
+          NoBahanBaku: r.Ref1,
+          NoPallet: r.Ref2,
+          IdJenis: r.IdJenis ?? null,
+          NamaJenis: r.NamaJenis ?? null,
+        }).DetailSak.push({
+          NoSak: r.Ref3 ?? null,
+          NoBBPartial: null,
+          Berat: r.Berat ?? null,
+          BeratAct: r.BeratAct ?? null,
+          IsPartial: r.IsPartial ?? null,
+        });
+        break;
+      case "washing":
+        ensure(washingMap, r.Ref1, {
+          NoProduksi: r.NoProduksi,
+          NoWashing: r.Ref1,
+          IdJenis: r.IdJenis ?? null,
+          NamaJenis: r.NamaJenis ?? null,
+        }).DetailSak.push({
+          NoSak: r.Ref2 ?? null,
+          Berat: r.Berat ?? null,
+          BeratAct: r.BeratAct ?? null,
+          IsPartial: r.IsPartial ?? null,
+        });
+        break;
+      case "crusher":
+        ensure(crusherMap, r.Ref1, {
+          NoProduksi: r.NoProduksi,
+          NoCrusher: r.Ref1,
+          IdJenis: r.IdJenis ?? null,
+          NamaJenis: r.NamaJenis ?? null,
+        }).DetailSak.push({
+          Berat: r.Berat ?? null,
+          IsPartial: r.IsPartial ?? null,
+        });
+        break;
+      case "gilingan":
+        ensure(gilinganMap, r.Ref1, {
+          NoProduksi: r.NoProduksi,
+          NoGilingan: r.Ref1,
+          IdJenis: r.IdJenis ?? null,
+          NamaJenis: r.NamaJenis ?? null,
+        }).DetailSak.push({
+          NoGilinganPartial: null,
+          Berat: r.Berat ?? null,
+          IsPartial: r.IsPartial ?? null,
+        });
+        break;
+      case "mixer":
+        ensure(mixerMap, r.Ref1, {
+          NoProduksi: r.NoProduksi,
+          NoMixer: r.Ref1,
+          IdJenis: r.IdJenis ?? null,
+          NamaJenis: r.NamaJenis ?? null,
+        }).DetailSak.push({
+          NoSak: r.Ref2 ?? null,
+          NoMixerPartial: null,
+          Berat: r.Berat ?? null,
+          BeratAct: r.BeratAct ?? null,
+          IsPartial: r.IsPartial ?? null,
+        });
+        break;
+      case "reject":
+        ensure(rejectMap, r.Ref1, {
+          NoProduksi: r.NoProduksi,
+          NoReject: r.Ref1,
+          IdJenis: r.IdJenis ?? null,
+          NamaJenis: r.NamaJenis ?? null,
+        }).DetailSak.push({
+          NoRejectPartial: null,
+          Berat: r.Berat ?? null,
+          IsPartial: r.IsPartial ?? null,
+        });
+        break;
+    }
+  }
+
+  // ===================== PARTIAL BB =====================
+  for (const p of bbPart) {
+    ensure(bbMap, `${p.NoBahanBaku}::${p.NoPallet}`, {
+      NoProduksi: noProduksi,
+      NoBahanBaku: p.NoBahanBaku ?? null,
+      NoPallet: p.NoPallet ?? null,
+      IdJenis: p.IdJenis ?? null,
+      NamaJenis: p.NamaJenis ?? null,
+    }).DetailSak.push({
+      NoSak: p.NoSak ?? null,
+      NoBBPartial: p.NoBBPartial ?? null,
+      Berat: p.Berat ?? null,
+      BeratAct: null,
+      IsPartial: true,
+    });
+  }
+
+  // ===================== PARTIAL GILINGAN =====================
+  for (const p of gilPart) {
+    ensure(gilinganMap, p.NoGilingan, {
+      NoProduksi: noProduksi,
+      NoGilingan: p.NoGilingan ?? null,
+      IdJenis: p.IdJenis ?? null,
+      NamaJenis: p.NamaJenis ?? null,
+    }).DetailSak.push({
+      NoGilinganPartial: p.NoGilinganPartial ?? null,
+      Berat: p.Berat ?? null,
+      IsPartial: true,
+    });
+  }
+
+  // ===================== PARTIAL MIXER =====================
+  for (const p of mixPart) {
+    ensure(mixerMap, p.NoMixer, {
+      NoProduksi: noProduksi,
+      NoMixer: p.NoMixer ?? null,
+      IdJenis: p.IdJenis ?? null,
+      NamaJenis: p.NamaJenis ?? null,
+    }).DetailSak.push({
+      NoSak: p.NoSak ?? null,
+      NoMixerPartial: p.NoMixerPartial ?? null,
+      Berat: p.Berat ?? null,
+      BeratAct: null,
+      IsPartial: true,
+    });
+  }
+
+  // ===================== PARTIAL REJECT =====================
+  for (const p of rejPart) {
+    ensure(rejectMap, p.NoReject, {
+      NoProduksi: noProduksi,
+      NoReject: p.NoReject ?? null,
+      IdJenis: p.IdJenis ?? null,
+      NamaJenis: p.NamaJenis ?? null,
+    }).DetailSak.push({
+      NoRejectPartial: p.NoRejectPartial ?? null,
+      Berat: p.Berat ?? null,
+      IsPartial: true,
+    });
+  }
+
+  // ===================== PARTIAL BROKER =====================
+  for (const p of brkPart) {
+    ensure(brokerMap, p.NoBroker, {
+      NoProduksi: noProduksi,
+      NoBroker: p.NoBroker ?? null,
+      IdJenis: p.IdJenis ?? null,
+      NamaJenis: p.NamaJenis ?? null,
+    }).DetailSak.push({
+      NoSak: p.NoSak ?? null,
+      NoBrokerPartial: p.NoBrokerPartial ?? null,
+      Berat: p.Berat ?? null,
+      BeratAct: null,
+      IsPartial: true,
+    });
+  }
+
+  return {
+    broker: Array.from(brokerMap.values()),
+    bb: Array.from(bbMap.values()),
+    washing: Array.from(washingMap.values()),
+    crusher: Array.from(crusherMap.values()),
+    gilingan: Array.from(gilinganMap.values()),
+    mixer: Array.from(mixerMap.values()),
+    reject: Array.from(rejectMap.values()),
+  };
+}
+
 async function getFormulaInputsByNoProduksi(noProduksi) {
   const no = String(noProduksi || "").trim();
   if (!no) throw badReq("noProduksi wajib");
@@ -698,6 +911,15 @@ async function fetchOutputs(noProduksi) {
   }
 
   return Array.from(byBroker.values());
+}
+
+/**
+ * Sama seperti fetchOutputs, tapi dibungkus per kategori sumber (saat ini
+ * hanya "broker") supaya shape-nya konsisten dengan fetchInputsV2.
+ */
+async function fetchOutputsV2(noProduksi) {
+  const broker = await fetchOutputs(noProduksi);
+  return { broker };
 }
 
 async function fetchOutputsBonggolan(noProduksi) {
@@ -2910,8 +3132,10 @@ module.exports = {
   getAllProduksi,
   getProduksiByDate,
   fetchInputs,
+  fetchInputsV2,
   getFormulaInputsByNoProduksi,
   fetchOutputs,
+  fetchOutputsV2,
   fetchOutputsBonggolan,
   createBrokerProduksi,
   completeBrokerProduksi,

@@ -446,7 +446,11 @@ ${lokasiWhere};
       ...(r.DateCreate && { DateCreate: formatDate(r.DateCreate) }),
     };
 
-    if (["furniturewip", "barangjadi"].includes((r.KodeKategori || "").toLowerCase())) {
+    if (
+      ["furniturewip", "barangjadi"].includes(
+        (r.KodeKategori || "").toLowerCase(),
+      )
+    ) {
       delete item.Berat;
     }
 
@@ -458,7 +462,9 @@ ${lokasiWhere};
   const totalBerat = sumResult.recordset[0]?.TotalBerat || 0;
 
   const kategoriKey = (kategori || "").toLowerCase();
-  const kategoriLabel = kategori ? (KATEGORI_LABELS[kategoriKey] || kategori) : "semua";
+  const kategoriLabel = kategori
+    ? KATEGORI_LABELS[kategoriKey] || kategori
+    : "semua";
 
   return {
     // ✅ metadata baru (lebih ramah UI)
@@ -667,11 +673,19 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   // Validasi minimal
   const idLokasiInt = toIntOrNull(idLokasi);
   if (idLokasiInt === null) {
-    return { success: false, code: "VALIDATION_ERROR", message: "idLokasi wajib angka (INT)" };
+    return {
+      success: false,
+      code: "VALIDATION_ERROR",
+      message: "idLokasi wajib angka (INT)",
+    };
   }
   const blokNorm = normBlok(blok);
   if (!blokNorm) {
-    return { success: false, code: "VALIDATION_ERROR", message: "blok wajib diisi" };
+    return {
+      success: false,
+      code: "VALIDATION_ERROR",
+      message: "blok wajib diisi",
+    };
   }
 
   // Normalisasi prefix
@@ -746,7 +760,11 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   const available = !!availRes.recordset[0].Available;
 
   if (!available) {
-    return { success: false, code: "ALREADY_USED", message: `Label ${labelCode} sudah terpakai!` };
+    return {
+      success: false,
+      code: "ALREADY_USED",
+      message: `Label ${labelCode} sudah terpakai!`,
+    };
   }
 
   // ========= 1.5) GUARD: jika tidak ada perubahan, hentikan di sini =========
@@ -777,8 +795,7 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   const kategoriPrefix = prefix === "AB" ? "A" : prefix;
   const kategoriRes = await pool
     .request()
-    .input("Prefix", sql.VarChar(20), kategoriPrefix)
-    .query(`
+    .input("Prefix", sql.VarChar(20), kategoriPrefix).query(`
       SELECT TOP 1 IdKategori, NamaKolomIdJenisDiLabel
       FROM dbo.MstKategori WITH (NOLOCK)
       WHERE REPLACE(UPPER(PrefixLabel), '.', '') = UPPER(@Prefix)
@@ -786,7 +803,9 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
     `);
 
   const kategori = kategoriRes.recordset?.[0] || null;
-  const jenisCol = kategori ? String(kategori.NamaKolomIdJenisDiLabel || "").trim() : "";
+  const jenisCol = kategori
+    ? String(kategori.NamaKolomIdJenisDiLabel || "").trim()
+    : "";
   if (!kategori || !isSafeSqlIdentifier(jenisCol)) {
     return {
       success: false,
@@ -797,8 +816,7 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
 
   const jenisRes = await pool
     .request()
-    .input("LabelCode", sql.NVarChar(50), labelCode)
-    .query(`
+    .input("LabelCode", sql.NVarChar(50), labelCode).query(`
       SELECT TOP 1 ${jenisCol} AS IdJenis
       FROM ${tableName}
       WHERE ${labelCol} = @LabelCode;
@@ -818,8 +836,7 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
     .input("Blok", sql.VarChar(100), blokNorm)
     .input("IdLokasi", sql.Int, idLokasiInt)
     .input("IdKategori", sql.Int, kategori.IdKategori)
-    .input("IdJenis", sql.Int, idJenisLabel)
-    .query(`
+    .input("IdJenis", sql.Int, idJenisLabel).query(`
       SELECT TOP 1 1 AS Found
       FROM dbo.MstLokasiJenis
       WHERE Blok = @Blok AND IdLokasi = @IdLokasi
@@ -872,7 +889,13 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   };
 }
 
-async function getAllLabelsV2(page = 1, limit = 50, kategori = null, idlokasi = null, blok = null) {
+async function getAllLabelsV2(
+  page = 1,
+  limit = 50,
+  kategori = null,
+  idlokasi = null,
+  blok = null,
+) {
   const pool = await poolPromise;
   const offset = (page - 1) * limit;
 
@@ -911,10 +934,13 @@ async function getAllLabelsV2(page = 1, limit = 50, kategori = null, idlokasi = 
     const jenisIdCol = escapeId(kat.NamaKolomIdJenis);
     const jenisNameCol = escapeId(kat.NamaKolomNamaJenis);
     const jenisIdDiLabel = escapeId(kat.NamaKolomIdJenisDiLabel);
-    const hasJenis = Boolean(jenisTbl && jenisIdCol && jenisNameCol && jenisIdDiLabel);
+    const hasJenis = Boolean(
+      jenisTbl && jenisIdCol && jenisNameCol && jenisIdDiLabel,
+    );
 
     function jenisJoin(alias) {
-      if (!hasJenis) return { join: "", select: ", NULL AS IdJenis, NULL AS NamaJenis" };
+      if (!hasJenis)
+        return { join: "", select: ", NULL AS IdJenis, NULL AS NamaJenis" };
       return {
         join: ` LEFT JOIN [dbo].[${jenisTbl}] j ON j.${jenisIdCol} = ${alias}.${jenisIdDiLabel}`,
         select: `, ${alias}.${jenisIdDiLabel} AS IdJenis, j.${jenisNameCol} AS NamaJenis`,

@@ -58,6 +58,15 @@ router.get(
   brokerProduksiController.getInputsByNoProduksi,
 );
 
+// GET /api/production/broker/:noProduksi/inputs/v2
+// Sama seperti /inputs, tapi digrup per label (header + DetailSak[])
+// mengikuti format response endpoint /outputs.
+router.get(
+  "/broker/:noProduksi/inputs/v2",
+  verifyToken,
+  brokerProduksiController.getInputsByNoProduksiV2,
+);
+
 router.get(
   "/broker/:noProduksi/formula-inputs",
   verifyToken,
@@ -68,6 +77,15 @@ router.get(
   "/broker/:noProduksi/outputs",
   verifyToken,
   brokerProduksiController.getOutputsByNoProduksi,
+);
+
+// GET /api/production/broker/:noProduksi/outputs/v2
+// Sama seperti /outputs, tapi dibungkus per kategori sumber (mis. "broker")
+// mengikuti format response endpoint /inputs/v2.
+router.get(
+  "/broker/:noProduksi/outputs/v2",
+  verifyToken,
+  brokerProduksiController.getOutputsByNoProduksiV2,
 );
 
 router.get(

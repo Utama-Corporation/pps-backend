@@ -116,6 +116,28 @@ async function getInputsByNoProduksi(req, res) {
   }
 }
 
+async function getInputsByNoProduksiV2(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+  try {
+    const data = await brokerProduksiService.fetchInputsV2(noProduksi);
+    return res
+      .status(200)
+      .json({ success: true, message: "Inputs retrieved", data });
+  } catch (e) {
+    console.error("[getInputsByNoProduksiV2]", e);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: e.message,
+    });
+  }
+}
+
 async function getFormulaInputsByNoProduksi(req, res) {
   const { noProduksi } = req.params;
 
@@ -194,6 +216,28 @@ async function getOutputsByNoProduksi(req, res) {
       .json({ success: true, message: "Outputs retrieved", data });
   } catch (e) {
     console.error("[getOutputsByNoProduksi]", e);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: e.message,
+    });
+  }
+}
+
+async function getOutputsByNoProduksiV2(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+  try {
+    const data = await brokerProduksiService.fetchOutputsV2(noProduksi);
+    return res
+      .status(200)
+      .json({ success: true, message: "Outputs retrieved", data });
+  } catch (e) {
+    console.error("[getOutputsByNoProduksiV2]", e);
     return res.status(500).json({
       success: false,
       message: "Internal Server Error",
@@ -1132,8 +1176,10 @@ async function splitProduksiTime(req, res) {
 module.exports = {
   getProduksiByDate,
   getInputsByNoProduksi,
+  getInputsByNoProduksiV2,
   getFormulaInputsByNoProduksi,
   getOutputsByNoProduksi,
+  getOutputsByNoProduksiV2,
   getOutputsBonggolanByNoProduksi,
   getAllProduksi,
   createProduksi,

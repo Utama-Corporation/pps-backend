@@ -45,10 +45,6 @@ router.get(
 );
 
 // POST /api/production/return/import-as-gsu - import selected items
-router.post(
-  "/return/import-as-gsu",
-  verifyToken,
-  returnController.importAsGsu,
-);
+router.post("/return/import-as-gsu", verifyToken, returnController.importAsGsu);
 
 module.exports = router;

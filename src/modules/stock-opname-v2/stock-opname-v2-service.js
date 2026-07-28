@@ -517,18 +517,41 @@ async function previewStockOpnameLabelCount({ categoryId }) {
   const cfg = STOCK_OPNAME_SNAPSHOT_CONFIG[categoryCode];
   if (!cfg) throw badReq(`categoryCode tidak dikenali: ${categoryCode}`);
 
-  // Reuse persis query sumber yang dipakai generateStockOpname (cteSql + finalSelectSql),
-  // dibungkus COUNT(*) supaya tidak perlu insert apa pun untuk sekadar preview jumlah.
-  const countReq = pool.request();
-  countReq.input("noso", sql.VarChar, "");
-  countReq.input("tanggal", sql.Date, docDateOnly);
+  // Furniture WIP dihitung per pcs, bukan berat.
+  const showWeight = categoryCode !== "furniturewip";
 
-  const result = await countReq.query(`
+  // Reuse persis query sumber yang dipakai generateStockOpname (cteSql + finalSelectSql),
+  // dibungkus GROUP BY jenis supaya tidak perlu insert apa pun untuk sekadar preview
+  // detail jenis & berat/pcs-nya sebelum benar-benar generate.
+  const breakdownReq = pool.request();
+  breakdownReq.input("noso", sql.VarChar, "");
+  breakdownReq.input("tanggal", sql.Date, docDateOnly);
+
+  const breakdownRes = await breakdownReq.query(`
     ${cfg.cteSql || ""}
-    SELECT COUNT(*) AS labelCount FROM (
+    SELECT
+      src.${cfg.jenisColumn} AS typeId,
+      COUNT(*) AS labelCount,
+      ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight" : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs"}
+    FROM (
       ${cfg.finalSelectSql}
-    ) AS src;
+    ) AS src
+    GROUP BY src.${cfg.jenisColumn};
   `);
+
+  const typeMaster = await getJenisByKategori(categoryIdNum);
+  const typeNameById = new Map(
+    (typeMaster?.jenis || []).map((j) => [j.IdJenis, j.NamaJenis]),
+  );
+
+  const perJenis = (breakdownRes.recordset || []).map((row) => ({
+    typeId: row.typeId,
+    typeName: typeNameById.get(row.typeId) ?? null,
+    labelCount: row.labelCount,
+    ...(showWeight ? { totalWeight: row.totalWeight } : { totalPcs: row.totalPcs }),
+  }));
+
+  const labelCount = perJenis.reduce((sum, row) => sum + row.labelCount, 0);
 
   return {
     categoryId: categoryIdNum,
@@ -536,7 +559,11 @@ async function previewStockOpnameLabelCount({ categoryId }) {
     categoryName,
     date: formatYMD(docDateOnly),
     hasDateFilter: cfg.hasDateCreateFilter,
-    labelCount: result.recordset?.[0]?.labelCount || 0,
+    labelCount,
+    ...(showWeight
+      ? { totalWeight: Math.round(perJenis.reduce((sum, row) => sum + (row.totalWeight || 0), 0) * 100) / 100 }
+      : { totalPcs: perJenis.reduce((sum, row) => sum + (row.totalPcs || 0), 0) }),
+    perJenis,
   };
 }
 
@@ -704,6 +731,77 @@ async function completeStockOpname({ stockOpnameNo, ctx }) {
     } catch (_) {}
     throw e;
   }
+}
+
+// Dipakai FE utk dialog konfirmasi sebelum "complete" — rangkuman total,
+// per-jenis, per-blok, dan jumlah user yang aksesnya akan otomatis dicabut
+// (lihat revokeAccessByStockOpname di completeStockOpname) supaya kepala
+// gudang bisa cek kelengkapan scan sebelum menutup sesi.
+async function getCompleteSummary({ stockOpnameNo }) {
+  const pool = await poolPromise;
+  const { no, header, categoryRow, categoryCode, cfg } =
+    await resolveStockOpnameCategory(pool, stockOpnameNo);
+
+  const showWeight = categoryCode !== "furniturewip";
+  const scannedMatchSql = [
+    "h.NoSO = src.NoSO",
+    ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
+  ].join(" AND ");
+
+  const totalRes = await pool
+    .request()
+    .input("stockOpnameNo", sql.VarChar, no).query(`
+      SELECT
+        COUNT(*) AS labelCount,
+        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+        SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
+      FROM dbo.${cfg.snapshotTable} AS src
+      LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
+      WHERE src.NoSO = @stockOpnameNo;
+    `);
+  const totalRow = totalRes.recordset?.[0] || { labelCount: 0, scannedCount: 0 };
+  const labelCount = totalRow.labelCount || 0;
+  const scannedCount = totalRow.scannedCount || 0;
+
+  const assignedRes = await pool
+    .request()
+    .input("stockOpnameNo", sql.VarChar, no).query(`
+      SELECT COUNT(DISTINCT IdUsername) AS assignedUsersCount
+      FROM dbo.MstUserLokasiAccess
+      WHERE NoSO = @stockOpnameNo;
+    `);
+
+  const [jenisResult, blokResult] = await Promise.all([
+    getTypesInStockOpname({ stockOpnameNo: no }),
+    getAllBlok({ stockOpnameNo: no }),
+  ]);
+
+  return {
+    stockOpnameNo: no,
+    date: header.Tanggal,
+    categoryId: header.IdKategori,
+    categoryCode,
+    categoryName: categoryRow.NamaKategori,
+    isComplete: !!header.IsComplete,
+    completedAt: header.DateComplete ?? null,
+    total: {
+      labelCount,
+      scannedCount,
+      unscannedCount: labelCount - scannedCount,
+      ...(showWeight
+        ? { totalWeight: totalRow.totalWeight }
+        : { totalPcs: totalRow.totalPcs }),
+    },
+    perJenis: jenisResult.data.map((row) => ({
+      ...row,
+      unscannedCount: row.labelCount - row.scannedCount,
+    })),
+    perBlok: blokResult.data.map((row) => ({
+      ...row,
+      unscannedCount: row.labelCount - row.scannedCount,
+    })),
+    assignedUsersCount: assignedRes.recordset?.[0]?.assignedUsersCount || 0,
+  };
 }
 
 async function getTypesInStockOpname({ stockOpnameNo }) {
@@ -948,7 +1046,7 @@ async function getStockOpnameSnapshot({
 
 async function getAllBlok({ stockOpnameNo }) {
   const pool = await poolPromise;
-  const { no, header, categoryCode, cfg } =
+  const { no, header, categoryRow, categoryCode, cfg } =
     await resolveStockOpnameCategory(pool, stockOpnameNo);
 
   const scannedMatchSql = [
@@ -994,7 +1092,17 @@ async function getAllBlok({ stockOpnameNo }) {
     if (b.blok === UNKNOWN_BLOK_CODE) return -1;
     return a.blok < b.blok ? -1 : a.blok > b.blok ? 1 : 0;
   });
-  return bloks;
+
+  return {
+    stockOpnameNo: no,
+    categoryId: header.IdKategori,
+    categoryCode,
+    categoryName: categoryRow.NamaKategori,
+    isComplete: !!header.IsComplete,
+    completedAt: header.DateComplete ?? null,
+    data: bloks,
+    totalRecords: bloks.length,
+  };
 }
 
 async function getLocationsInBlok({ stockOpnameNo, blok }) {
@@ -1448,6 +1556,59 @@ async function insertStockOpnameHasil({
   };
 }
 
+// Dipakai FE utk lihat siapa saja yang sudah scan pada NoSO ini dan berapa
+// jumlah label masing-masing — Username diambil dari kolom Username di tabel
+// hasil (diisi dari actorUsername token saat insertStockOpnameHasil), bukan
+// dari MstUserLokasiAccess (itu penugasan, bukan realisasi scan).
+async function getScanUserSummary({ stockOpnameNo }) {
+  const pool = await poolPromise;
+  const { no, header, categoryRow, categoryCode, cfg } =
+    await resolveStockOpnameCategory(pool, stockOpnameNo);
+
+  // Furniture WIP dihitung per pcs, bukan berat.
+  const showWeight = categoryCode !== "furniturewip";
+
+  const res = await pool
+    .request()
+    .input("stockOpnameNo", sql.VarChar, no).query(`
+      SELECT
+        h.Username AS username,
+        u.FName,
+        u.LName,
+        COUNT(*) AS labelCount,
+        MIN(h.DateTimeScan) AS firstScanAt,
+        MAX(h.DateTimeScan) AS lastScanAt,
+        ${showWeight ? "ROUND(SUM(ISNULL(h.Berat, 0)), 2) AS totalWeight" : "ROUND(SUM(ISNULL(h.Pcs, 0)), 0) AS totalPcs"}
+      FROM dbo.${cfg.hasilTable} AS h
+      LEFT JOIN dbo.MstUsername AS u ON u.Username = h.Username
+      WHERE h.NoSO = @stockOpnameNo
+      GROUP BY h.Username, u.FName, u.LName
+      ORDER BY labelCount DESC;
+    `);
+
+  const rows = res.recordset || [];
+  const data = rows.map((row) => ({
+    username: row.username,
+    fullName: [row.FName, row.LName].filter(Boolean).join(" ") || null,
+    labelCount: row.labelCount,
+    firstScanAt: row.firstScanAt,
+    lastScanAt: row.lastScanAt,
+    ...(showWeight ? { totalWeight: row.totalWeight } : { totalPcs: row.totalPcs }),
+  }));
+
+  return {
+    stockOpnameNo: no,
+    categoryId: header.IdKategori,
+    categoryCode,
+    categoryName: categoryRow.NamaKategori,
+    isComplete: !!header.IsComplete,
+    completedAt: header.DateComplete ?? null,
+    data,
+    totalUsers: data.length,
+    totalScanned: data.reduce((sum, row) => sum + row.labelCount, 0),
+  };
+}
+
 async function deleteStockOpname({ stockOpnameNo, ctx }) {
   const no = String(stockOpnameNo || "").trim();
   if (!no) throw badReq("stockOpnameNo wajib diisi");
@@ -1556,9 +1717,11 @@ module.exports = {
   previewStockOpnameLabelCount,
   generateStockOpname,
   completeStockOpname,
+  getCompleteSummary,
   getTypesInStockOpname,
   getStockOpnameSnapshot,
   insertStockOpnameHasil,
+  getScanUserSummary,
   deleteStockOpname,
   getAllBlok,
   getLocationsInBlok,

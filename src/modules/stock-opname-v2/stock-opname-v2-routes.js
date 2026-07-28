@@ -86,6 +86,14 @@ router.post(
   stockOpnameV2Controller.generateStockOpnameHandler,
 );
 
+// Dipakai FE utk dialog konfirmasi sebelum PATCH .../complete di bawah —
+// rangkuman total/per-jenis/per-blok label yang sudah vs belum discan.
+router.get(
+  "/stock-opname-v2/transaksi/:stockOpnameNo/complete-summary",
+  verifyToken,
+  stockOpnameV2Controller.getCompleteSummaryHandler,
+);
+
 router.patch(
   "/stock-opname-v2/transaksi/:stockOpnameNo/complete",
   verifyToken,
@@ -114,6 +122,15 @@ router.post(
   "/stock-opname-v2/transaksi/:stockOpnameNo/hasil",
   verifyToken,
   stockOpnameV2Controller.insertHasilHandler,
+);
+
+// Rangkuman siapa saja yang sudah scan pada NoSO ini beserta jumlah label
+// masing-masing — dipakai FE utk monitoring progres per user (bukan per
+// lokasi tugas seperti ".../lokasi" di bawah).
+router.get(
+  "/stock-opname-v2/transaksi/:stockOpnameNo/scan-summary",
+  verifyToken,
+  stockOpnameV2Controller.getScanUserSummaryHandler,
 );
 
 router.get(

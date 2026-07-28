@@ -207,6 +207,36 @@ async function generateStockOpnameHandler(req, res) {
   }
 }
 
+async function getCompleteSummaryHandler(req, res) {
+  const { stockOpnameNo } = req.params;
+
+  console.log(
+    "Fetching complete summary (stock-opname-v2) | Username:",
+    req.username,
+    "| stockOpnameNo:",
+    stockOpnameNo,
+  );
+
+  try {
+    const result = await stockOpnameV2Service.getCompleteSummary({
+      stockOpnameNo,
+    });
+
+    return res.json({
+      success: true,
+      message: `Ringkasan stock opname ${result.stockOpnameNo} berhasil diambil`,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error fetching complete summary:", error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+      code: error.code,
+    });
+  }
+}
+
 async function completeStockOpnameHandler(req, res) {
   const actorId = getActorId(req);
   if (!actorId) {
@@ -426,6 +456,44 @@ async function insertHasilHandler(req, res) {
   }
 }
 
+async function getScanUserSummaryHandler(req, res) {
+  const { stockOpnameNo } = req.params;
+
+  console.log(
+    "Fetching scan user summary (stock-opname-v2) | Username:",
+    req.username,
+    "| stockOpnameNo:",
+    stockOpnameNo,
+  );
+
+  try {
+    const result = await stockOpnameV2Service.getScanUserSummary({
+      stockOpnameNo,
+    });
+
+    if (!result.data.length) {
+      return res.status(404).json({
+        success: false,
+        message: `Belum ada user yang melakukan scan pada stock opname ${stockOpnameNo}`,
+        data: result,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `Ringkasan user scan ${result.stockOpnameNo} berhasil diambil`,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error fetching scan user summary:", error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+      code: error.code,
+    });
+  }
+}
+
 async function listBlokHandler(req, res) {
   const { stockOpnameNo } = req.params;
 
@@ -437,21 +505,20 @@ async function listBlokHandler(req, res) {
   );
 
   try {
-    const data = await stockOpnameV2Service.getAllBlok({ stockOpnameNo });
+    const result = await stockOpnameV2Service.getAllBlok({ stockOpnameNo });
 
-    if (!data.length) {
+    if (!result.data.length) {
       return res.status(404).json({
         success: false,
         message: "Data blok tidak ditemukan",
-        data: [],
+        data: result,
       });
     }
 
     return res.json({
       success: true,
       message: "Data blok berhasil diambil",
-      data,
-      totalRecords: data.length,
+      data: result,
     });
   } catch (error) {
     console.error("Error fetching blok:", error);
@@ -690,11 +757,13 @@ module.exports = {
   listRiwayatHandler,
   previewLabelCountHandler,
   generateStockOpnameHandler,
+  getCompleteSummaryHandler,
   completeStockOpnameHandler,
   deleteStockOpnameHandler,
   getJenisInNosoHandler,
   getSnapshotHandler,
   insertHasilHandler,
+  getScanUserSummaryHandler,
   listBlokHandler,
   getLocationsHandler,
   getMyLokasiHandler,

@@ -800,11 +800,11 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
     const kategoriRes = await pool
       .request()
       .input("Prefix", sql.VarChar(20), kategoriPrefix).query(`
-        SELECT TOP 1 IdKategori, NamaKolomIdJenisDiLabel
-        FROM dbo.MstKategori WITH (NOLOCK)
-        WHERE REPLACE(UPPER(PrefixLabel), '.', '') = UPPER(@Prefix)
-          AND ISNULL(Enable, 1) = 1;
-      `);
+      SELECT TOP 1 IdKategori, NamaKolomIdJenisDiLabel
+      FROM dbo.MstKategori WITH (NOLOCK)
+      WHERE REPLACE(UPPER(PrefixLabel), '.', '') = UPPER(@Prefix)
+        AND ISNULL(Enable, 1) = 1;
+    `);
 
     const kategori = kategoriRes.recordset?.[0] || null;
     const jenisCol = kategori
@@ -821,10 +821,10 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
     const jenisRes = await pool
       .request()
       .input("LabelCode", sql.NVarChar(50), labelCode).query(`
-        SELECT TOP 1 ${jenisCol} AS IdJenis
-        FROM ${tableName}
-        WHERE ${labelCol} = @LabelCode;
-      `);
+      SELECT TOP 1 ${jenisCol} AS IdJenis
+      FROM ${tableName}
+      WHERE ${labelCol} = @LabelCode;
+    `);
 
     const idJenisLabel = toIntOrNull(jenisRes.recordset?.[0]?.IdJenis);
     if (idJenisLabel === null) {
@@ -841,11 +841,11 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
       .input("IdLokasi", sql.Int, idLokasiInt)
       .input("IdKategori", sql.Int, kategori.IdKategori)
       .input("IdJenis", sql.Int, idJenisLabel).query(`
-        SELECT TOP 1 1 AS Found
-        FROM dbo.MstLokasiJenis
-        WHERE Blok = @Blok AND IdLokasi = @IdLokasi
-          AND IdKategori = @IdKategori AND IdJenis = @IdJenis;
-      `);
+      SELECT TOP 1 1 AS Found
+      FROM dbo.MstLokasiJenis
+      WHERE Blok = @Blok AND IdLokasi = @IdLokasi
+        AND IdKategori = @IdKategori AND IdJenis = @IdJenis;
+    `);
 
     if (!lokasiJenisRes.recordset.length) {
       return {

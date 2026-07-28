@@ -26,6 +26,7 @@ const {
 } = require("../../../core/utils/http-error");
 
 const { applyAuditContext } = require("../../../core/utils/db-audit-context");
+const { getIo } = require("../../../core/utils/socket-instance");
 const {
   generateNextCode,
 } = require("../../../core/utils/sequence-code-helper");
@@ -94,6 +95,8 @@ async function getAllProduksi(
   idMesin = null,
   tanggal = null,
   shift = null,
+  complete = null,
+  verified = null,
 ) {
   const pool = await poolPromise;
 
@@ -108,6 +111,11 @@ async function getAllProduksi(
       AND (@idMesin IS NULL OR h.IdMesin = @idMesin)
       AND (@tanggal IS NULL OR CONVERT(date, h.TglProduksi) = @tanggal)
       AND (@shift IS NULL OR h.Shift = @shift)
+      AND (@complete IS NULL OR h.IsComplete = @complete)
+      AND (
+        @verified IS NULL
+        OR (CASE WHEN h.VerifiedAt IS NOT NULL THEN 1 ELSE 0 END) = @verified
+      )
   `;
 
   // 1) Count (lightweight)
@@ -122,6 +130,8 @@ async function getAllProduksi(
   countReq.input("idMesin", sql.Int, idMesin);
   countReq.input("tanggal", sql.Date, tanggal);
   countReq.input("shift", sql.Int, shift);
+  countReq.input("complete", sql.Bit, complete);
+  countReq.input("verified", sql.Bit, verified);
 
   const countRes = await countReq.query(countQry);
   const total = countRes.recordset?.[0]?.total || 0;
@@ -183,6 +193,10 @@ async function getAllProduksi(
       h.Jam           AS JamKerja,
       h.Shift,
       h.IsComplete,
+      CASE WHEN h.VerifiedAt IS NOT NULL THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Verified,
+      h.VerifiedBy,
+      h.VerifiedAt,
+      h.VerifiedNote,
       h.CreateBy,
       h.CheckBy1,
       h.CheckBy2,
@@ -223,6 +237,8 @@ async function getAllProduksi(
   dataReq.input("idMesin", sql.Int, idMesin);
   dataReq.input("tanggal", sql.Date, tanggal);
   dataReq.input("shift", sql.Int, shift);
+  dataReq.input("complete", sql.Bit, complete);
+  dataReq.input("verified", sql.Bit, verified);
   dataReq.input("offset", sql.Int, offset);
   dataReq.input("limit", sql.Int, ps);
 
@@ -239,8 +255,7 @@ async function getAllProduksi(
   return { data: rows, total };
 }
 
-// fetchInputs(): main items + partial items (with full keys) in SAME list
-async function fetchInputs(noProduksi) {
+async function queryRawInputs(noProduksi) {
   const pool = await poolPromise;
   const req = pool.request();
   req.input("no", sql.VarChar(50), noProduksi);
@@ -469,12 +484,20 @@ async function fetchInputs(noProduksi) {
 
   const rs = await req.query(q);
 
-  const mainRows = rs.recordsets?.[0] || [];
-  const bbPart = rs.recordsets?.[1] || [];
-  const gilPart = rs.recordsets?.[2] || [];
-  const mixPart = rs.recordsets?.[3] || [];
-  const rejPart = rs.recordsets?.[4] || [];
-  const brkPart = rs.recordsets?.[5] || []; // ⬅️ TAMBAHKAN
+  return {
+    mainRows: rs.recordsets?.[0] || [],
+    bbPart: rs.recordsets?.[1] || [],
+    gilPart: rs.recordsets?.[2] || [],
+    mixPart: rs.recordsets?.[3] || [],
+    rejPart: rs.recordsets?.[4] || [],
+    brkPart: rs.recordsets?.[5] || [],
+  };
+}
+
+// fetchInputs(): main items + partial items (with full keys) in SAME list
+async function fetchInputs(noProduksi) {
+  const { mainRows, bbPart, gilPart, mixPart, rejPart, brkPart } =
+    await queryRawInputs(noProduksi);
 
   const out = {
     broker: [],
@@ -597,6 +620,212 @@ async function fetchInputs(noProduksi) {
   return out;
 }
 
+/**
+ * Sama seperti fetchInputs, tapi digrup per label (mirip shape fetchOutputs:
+ * header + DetailSak[]) supaya frontend tidak perlu grouping manual lagi.
+ */
+async function fetchInputsV2(noProduksi) {
+  const { mainRows, bbPart, gilPart, mixPart, rejPart, brkPart } =
+    await queryRawInputs(noProduksi);
+
+  const brokerMap = new Map();
+  const bbMap = new Map();
+  const washingMap = new Map();
+  const crusherMap = new Map();
+  const gilinganMap = new Map();
+  const mixerMap = new Map();
+  const rejectMap = new Map();
+
+  const ensure = (map, key, header) => {
+    if (!map.has(key)) map.set(key, { ...header, DetailSak: [] });
+    return map.get(key);
+  };
+
+  // ===================== MAIN ROWS =====================
+  for (const r of mainRows) {
+    switch (r.Src) {
+      case "broker":
+        ensure(brokerMap, r.Ref1, {
+          NoProduksi: r.NoProduksi,
+          NoBroker: r.Ref1,
+          IdJenis: r.IdJenis ?? null,
+          NamaJenis: r.NamaJenis ?? null,
+        }).DetailSak.push({
+          NoSak: r.Ref2 ?? null,
+          NoBrokerPartial: null,
+          Berat: r.Berat ?? null,
+          BeratAct: r.BeratAct ?? null,
+          IsPartial: r.IsPartial ?? null,
+        });
+        break;
+      case "bb":
+        ensure(bbMap, `${r.Ref1}::${r.Ref2}`, {
+          NoProduksi: r.NoProduksi,
+          NoBahanBaku: r.Ref1,
+          NoPallet: r.Ref2,
+          IdJenis: r.IdJenis ?? null,
+          NamaJenis: r.NamaJenis ?? null,
+        }).DetailSak.push({
+          NoSak: r.Ref3 ?? null,
+          NoBBPartial: null,
+          Berat: r.Berat ?? null,
+          BeratAct: r.BeratAct ?? null,
+          IsPartial: r.IsPartial ?? null,
+        });
+        break;
+      case "washing":
+        ensure(washingMap, r.Ref1, {
+          NoProduksi: r.NoProduksi,
+          NoWashing: r.Ref1,
+          IdJenis: r.IdJenis ?? null,
+          NamaJenis: r.NamaJenis ?? null,
+        }).DetailSak.push({
+          NoSak: r.Ref2 ?? null,
+          Berat: r.Berat ?? null,
+          BeratAct: r.BeratAct ?? null,
+          IsPartial: r.IsPartial ?? null,
+        });
+        break;
+      case "crusher":
+        ensure(crusherMap, r.Ref1, {
+          NoProduksi: r.NoProduksi,
+          NoCrusher: r.Ref1,
+          IdJenis: r.IdJenis ?? null,
+          NamaJenis: r.NamaJenis ?? null,
+        }).DetailSak.push({
+          Berat: r.Berat ?? null,
+          IsPartial: r.IsPartial ?? null,
+        });
+        break;
+      case "gilingan":
+        ensure(gilinganMap, r.Ref1, {
+          NoProduksi: r.NoProduksi,
+          NoGilingan: r.Ref1,
+          IdJenis: r.IdJenis ?? null,
+          NamaJenis: r.NamaJenis ?? null,
+        }).DetailSak.push({
+          NoGilinganPartial: null,
+          Berat: r.Berat ?? null,
+          IsPartial: r.IsPartial ?? null,
+        });
+        break;
+      case "mixer":
+        ensure(mixerMap, r.Ref1, {
+          NoProduksi: r.NoProduksi,
+          NoMixer: r.Ref1,
+          IdJenis: r.IdJenis ?? null,
+          NamaJenis: r.NamaJenis ?? null,
+        }).DetailSak.push({
+          NoSak: r.Ref2 ?? null,
+          NoMixerPartial: null,
+          Berat: r.Berat ?? null,
+          BeratAct: r.BeratAct ?? null,
+          IsPartial: r.IsPartial ?? null,
+        });
+        break;
+      case "reject":
+        ensure(rejectMap, r.Ref1, {
+          NoProduksi: r.NoProduksi,
+          NoReject: r.Ref1,
+          IdJenis: r.IdJenis ?? null,
+          NamaJenis: r.NamaJenis ?? null,
+        }).DetailSak.push({
+          NoRejectPartial: null,
+          Berat: r.Berat ?? null,
+          IsPartial: r.IsPartial ?? null,
+        });
+        break;
+    }
+  }
+
+  // ===================== PARTIAL BB =====================
+  for (const p of bbPart) {
+    ensure(bbMap, `${p.NoBahanBaku}::${p.NoPallet}`, {
+      NoProduksi: noProduksi,
+      NoBahanBaku: p.NoBahanBaku ?? null,
+      NoPallet: p.NoPallet ?? null,
+      IdJenis: p.IdJenis ?? null,
+      NamaJenis: p.NamaJenis ?? null,
+    }).DetailSak.push({
+      NoSak: p.NoSak ?? null,
+      NoBBPartial: p.NoBBPartial ?? null,
+      Berat: p.Berat ?? null,
+      BeratAct: null,
+      IsPartial: true,
+    });
+  }
+
+  // ===================== PARTIAL GILINGAN =====================
+  for (const p of gilPart) {
+    ensure(gilinganMap, p.NoGilingan, {
+      NoProduksi: noProduksi,
+      NoGilingan: p.NoGilingan ?? null,
+      IdJenis: p.IdJenis ?? null,
+      NamaJenis: p.NamaJenis ?? null,
+    }).DetailSak.push({
+      NoGilinganPartial: p.NoGilinganPartial ?? null,
+      Berat: p.Berat ?? null,
+      IsPartial: true,
+    });
+  }
+
+  // ===================== PARTIAL MIXER =====================
+  for (const p of mixPart) {
+    ensure(mixerMap, p.NoMixer, {
+      NoProduksi: noProduksi,
+      NoMixer: p.NoMixer ?? null,
+      IdJenis: p.IdJenis ?? null,
+      NamaJenis: p.NamaJenis ?? null,
+    }).DetailSak.push({
+      NoSak: p.NoSak ?? null,
+      NoMixerPartial: p.NoMixerPartial ?? null,
+      Berat: p.Berat ?? null,
+      BeratAct: null,
+      IsPartial: true,
+    });
+  }
+
+  // ===================== PARTIAL REJECT =====================
+  for (const p of rejPart) {
+    ensure(rejectMap, p.NoReject, {
+      NoProduksi: noProduksi,
+      NoReject: p.NoReject ?? null,
+      IdJenis: p.IdJenis ?? null,
+      NamaJenis: p.NamaJenis ?? null,
+    }).DetailSak.push({
+      NoRejectPartial: p.NoRejectPartial ?? null,
+      Berat: p.Berat ?? null,
+      IsPartial: true,
+    });
+  }
+
+  // ===================== PARTIAL BROKER =====================
+  for (const p of brkPart) {
+    ensure(brokerMap, p.NoBroker, {
+      NoProduksi: noProduksi,
+      NoBroker: p.NoBroker ?? null,
+      IdJenis: p.IdJenis ?? null,
+      NamaJenis: p.NamaJenis ?? null,
+    }).DetailSak.push({
+      NoSak: p.NoSak ?? null,
+      NoBrokerPartial: p.NoBrokerPartial ?? null,
+      Berat: p.Berat ?? null,
+      BeratAct: null,
+      IsPartial: true,
+    });
+  }
+
+  return {
+    broker: Array.from(brokerMap.values()),
+    bb: Array.from(bbMap.values()),
+    washing: Array.from(washingMap.values()),
+    crusher: Array.from(crusherMap.values()),
+    gilingan: Array.from(gilinganMap.values()),
+    mixer: Array.from(mixerMap.values()),
+    reject: Array.from(rejectMap.values()),
+  };
+}
+
 async function getFormulaInputsByNoProduksi(noProduksi) {
   const no = String(noProduksi || "").trim();
   if (!no) throw badReq("noProduksi wajib");
@@ -622,14 +851,15 @@ async function getFormulaInputsByNoProduksi(noProduksi) {
   }
 
   const outputId = Number(header.OutputId);
-  const normalizedOutputs = Number.isFinite(outputId) && outputId > 0
-    ? [
-        {
-          idJenis: outputId,
-          namaJenis: header.OutputNama ?? null,
-        },
-      ]
-    : [];
+  const normalizedOutputs =
+    Number.isFinite(outputId) && outputId > 0
+      ? [
+          {
+            idJenis: outputId,
+            namaJenis: header.OutputNama ?? null,
+          },
+        ]
+      : [];
 
   return {
     noProduksi: no,
@@ -698,6 +928,28 @@ async function fetchOutputs(noProduksi) {
   }
 
   return Array.from(byBroker.values());
+}
+
+/**
+ * Sama seperti fetchOutputs, tapi dibungkus per kategori sumber (saat ini
+ * hanya "broker") supaya shape-nya konsisten dengan fetchInputsV2.
+ */
+async function fetchOutputsV2(noProduksi) {
+  const [broker, bonggolanRows] = await Promise.all([
+    fetchOutputs(noProduksi),
+    fetchOutputsBonggolan(noProduksi),
+  ]);
+
+  const bonggolan = bonggolanRows.map((r) => ({
+    NoProduksi: r.NoProduksi,
+    NoBonggolan: r.NoBonggolan,
+    IdBonggolan: r.IdBonggolan ?? null,
+    NamaBonggolan: r.NamaBonggolan ?? null,
+    Berat: r.Berat ?? null,
+    HasBeenPrinted: r.HasBeenPrinted ?? 0,
+  }));
+
+  return { broker, bonggolan };
 }
 
 async function fetchOutputsBonggolan(noProduksi) {
@@ -1879,16 +2131,18 @@ async function completeBrokerProduksi(noProduksi, ctx) {
       sql.VarChar(50),
       no,
     ).query(`
-        SELECT TOP 1 NoProduksi, IsComplete
-        FROM dbo.BrokerProduksi_h WITH (UPDLOCK, HOLDLOCK)
-        WHERE NoProduksi = @NoProduksi;
+        SELECT TOP 1 h.NoProduksi, h.IsComplete, h.TglProduksi, mb.Nama AS OutputJenisNama
+        FROM dbo.BrokerProduksi_h h WITH (UPDLOCK, HOLDLOCK)
+        LEFT JOIN dbo.MstBroker mb WITH (NOLOCK) ON mb.IdBroker = h.OutputJenisId
+        WHERE h.NoProduksi = @NoProduksi;
       `);
 
     if (!checkRes.recordset?.length) {
       throw notFound(`NoProduksi tidak ditemukan: ${no}`);
     }
 
-    if (checkRes.recordset[0].IsComplete) {
+    const row = checkRes.recordset[0];
+    if (row.IsComplete) {
       throw conflict(`Produksi ${no} sudah complete.`);
     }
 
@@ -1900,10 +2154,168 @@ async function completeBrokerProduksi(noProduksi, ctx) {
 
     await tx.commit();
 
+    const completedAt = new Date().toISOString();
+
+    try {
+      const io = getIo();
+      if (io) {
+        io.emit("production_need_verification", {
+          jenisProduksi: "broker",
+          noProduksi: no,
+          tglProduksi: row.TglProduksi,
+          outputJenisNama: row.OutputJenisNama ?? null,
+          completedBy: actorUsername,
+          completedAt,
+        });
+      }
+    } catch (emitErr) {
+      console.error("[broker.completeBrokerProduksi] emit failed", emitErr);
+    }
+
     return {
       noProduksi: no,
       isComplete: true,
       status: "complete",
+    };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
+  }
+}
+
+async function verifyBrokerProduksi(noProduksi, ctx, note) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+  const verifyNote = String(note || "").trim() || null;
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const checkRes = await new sql.Request(tx).input(
+      "NoProduksi",
+      sql.VarChar(50),
+      no,
+    ).query(`
+        SELECT TOP 1 NoProduksi, IsComplete, VerifiedAt
+        FROM dbo.BrokerProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    if (!checkRes.recordset?.length) {
+      throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+    }
+
+    if (!checkRes.recordset[0].IsComplete) {
+      throw conflict(`Produksi ${no} belum complete, tidak bisa diverifikasi.`);
+    }
+
+    if (checkRes.recordset[0].VerifiedAt) {
+      throw conflict(`Produksi ${no} sudah diverifikasi.`);
+    }
+
+    await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), no)
+      .input("ActorId", sql.Int, Math.trunc(actorIdNum))
+      .input("Note", sql.NVarChar(500), verifyNote).query(`
+        UPDATE dbo.BrokerProduksi_h
+        SET VerifiedBy = @ActorId,
+            VerifiedAt = SYSUTCDATETIME(),
+            VerifiedNote = @Note
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    await tx.commit();
+
+    return {
+      noProduksi: no,
+      verified: true,
+      verifiedBy: Math.trunc(actorIdNum),
+      verifiedNote: verifyNote,
+    };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
+  }
+}
+
+async function unverifyBrokerProduksi(noProduksi, ctx, note) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+  const unverifyNote = String(note || "").trim() || null;
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const checkRes = await new sql.Request(tx).input(
+      "NoProduksi",
+      sql.VarChar(50),
+      no,
+    ).query(`
+        SELECT TOP 1 NoProduksi, VerifiedAt
+        FROM dbo.BrokerProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    if (!checkRes.recordset?.length) {
+      throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+    }
+
+    if (!checkRes.recordset[0].VerifiedAt) {
+      throw conflict(`Produksi ${no} belum diverifikasi.`);
+    }
+
+    await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), no)
+      .input("Note", sql.NVarChar(500), unverifyNote).query(`
+        UPDATE dbo.BrokerProduksi_h
+        SET VerifiedBy = NULL,
+            VerifiedAt = NULL,
+            VerifiedNote = @Note
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    await tx.commit();
+
+    return {
+      noProduksi: no,
+      verified: false,
+      verifiedNote: unverifyNote,
     };
   } catch (error) {
     try {
@@ -2910,11 +3322,15 @@ module.exports = {
   getAllProduksi,
   getProduksiByDate,
   fetchInputs,
+  fetchInputsV2,
   getFormulaInputsByNoProduksi,
   fetchOutputs,
+  fetchOutputsV2,
   fetchOutputsBonggolan,
   createBrokerProduksi,
   completeBrokerProduksi,
+  verifyBrokerProduksi,
+  unverifyBrokerProduksi,
   updateBrokerProduksi,
   deleteBrokerProduksi,
   validateLabel,

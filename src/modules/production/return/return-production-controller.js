@@ -261,6 +261,39 @@ async function getImportAsGsuByDate(req, res) {
   }
 }
 
+async function getImportAsGsuAfterDate(req, res) {
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+  const pageSizeRaw = parseInt(req.query.pageSize, 10) || 20;
+  const pageSize = Math.min(Math.max(pageSizeRaw, 1), 100);
+
+  try {
+    const { data, total } = await returnService.fetchImportAsGsuAfterDate(
+      page,
+      pageSize,
+    );
+    return res.status(200).json({
+      success: true,
+      message: `AS_GSU data for ${returnService.IMPORT_AS_GSU_CUTOFF_DATE} retrieved`,
+      totalData: total,
+      data,
+      meta: {
+        page,
+        pageSize,
+        totalPages: Math.max(Math.ceil(total / pageSize), 1),
+        hasNextPage: page * pageSize < total,
+        hasPrevPage: page > 1,
+      },
+    });
+  } catch (error) {
+    console.error("[return.getImportAsGsuAfterDate]", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message,
+    });
+  }
+}
+
 async function importAsGsu(req, res) {
   try {
     const username = req.username || req.user?.username || 'system';
@@ -293,5 +326,6 @@ module.exports = {
   getOutputsFurnitureWipByNoRetur,
   getOutputsBarangJadiByNoRetur,
   getImportAsGsuByDate,
+  getImportAsGsuAfterDate,
   importAsGsu,
 };

@@ -44,6 +44,14 @@ router.get(
   returnController.getImportAsGsuByDate,
 );
 
+// GET /api/production/return/import-as-gsu-after
+// Fetch AS_GSU data with InvoiceDate strictly after the fixed cutoff date.
+router.get(
+  "/return/import-as-gsu-after",
+  verifyToken,
+  returnController.getImportAsGsuAfterDate,
+);
+
 // POST /api/production/return/import-as-gsu - import selected items
 router.post("/return/import-as-gsu", verifyToken, returnController.importAsGsu);
 

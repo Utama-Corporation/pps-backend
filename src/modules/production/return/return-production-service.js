@@ -14,6 +14,8 @@ const {
 } = require("../../../core/utils/jam-kerja-helper");
 const { badReq } = require("../../../core/utils/http-error");
 
+const IMPORT_AS_GSU_CUTOFF_DATE = "2026-07-01";
+
 async function getAllReturns(
   page = 1,
   pageSize = 20,
@@ -464,12 +466,24 @@ async function fetchOutputsFurnitureWip(noRetur) {
   return rs.recordset || [];
 }
 
-async function fetchImportAsGsuByDate(date) {
-  const pool = await poolPromise;
-  const req = pool.request();
-  req.input("date", sql.Date, date);
+function buildImportAsGsuGroupedQuery(
+  comparisonOperator,
+  { excludeExistingInvoices = false } = {},
+) {
+  if (!["=", ">"].includes(comparisonOperator)) {
+    throw new Error("Unsupported InvoiceDate comparison operator");
+  }
 
-  const query = `
+  const existingInvoiceFilter = excludeExistingInvoices
+    ? `
+        AND NOT EXISTS (
+          SELECT 1
+          FROM dbo.BJRetur_h R
+          WHERE R.Invoice = B.InvoiceNumber
+        )`
+    : "";
+
+  return `
     SELECT
       A.InvoiceNumber,
       A.InvoiceType,
@@ -509,17 +523,147 @@ async function fetchImportAsGsuByDate(date) {
       LEFT JOIN AS_GSU.dbo.AR_Customers H ON H.CustomerID = B.CustomerID
       LEFT JOIN MstPembeli I ON I.CustomerCode = H.CustomerCode
       WHERE IsInvoice = 0
-        AND CONVERT(date, B.InvoiceDate) = @date
+        AND CONVERT(date, B.InvoiceDate) ${comparisonOperator} @date
         AND B.Void = 0
+        ${existingInvoiceFilter}
     ) A
     GROUP BY
       A.InvoiceNumber, A.InvoiceType, A.ItemName, A.StockCategoryName, A.ItemCode,
       A.CODE, A.SumberCode, A.CustomerName, A.IdPembeli
-    ORDER BY A.InvoiceNumber, A.ItemName
   `;
+}
 
-  const result = await req.query(query);
+async function fetchImportAsGsuByDateComparison(date, comparisonOperator) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("date", sql.Date, date);
+
+  const groupedQuery = buildImportAsGsuGroupedQuery(comparisonOperator);
+  const result = await req.query(`
+    ${groupedQuery}
+    ORDER BY A.InvoiceNumber, A.ItemName
+  `);
   return result.recordset || [];
+}
+
+async function fetchImportAsGsuByDate(date) {
+  return fetchImportAsGsuByDateComparison(date, "=");
+}
+
+function groupImportAsGsuRowsByInvoice(rows) {
+  const groups = new Map();
+
+  for (const row of rows) {
+    const key = JSON.stringify([
+      row.InvoiceNumber ?? null,
+      row.InvoiceType ?? null,
+    ]);
+
+    if (!groups.has(key)) {
+      groups.set(key, {
+        InvoiceNumber: row.InvoiceNumber ?? null,
+        InvoiceType: row.InvoiceType ?? null,
+        items: [],
+      });
+    }
+
+    groups.get(key).items.push(row);
+  }
+
+  return Array.from(groups.values());
+}
+
+async function fetchImportAsGsuAfterDate(page = 1, pageSize = 20) {
+  const pool = await poolPromise;
+  const p = Math.max(1, Number(page) || 1);
+  const ps = Math.max(1, Math.min(100, Number(pageSize) || 20));
+  const offset = (p - 1) * ps;
+  const groupedQuery = buildImportAsGsuGroupedQuery(">", {
+    excludeExistingInvoices: true,
+  });
+
+  const countReq = pool.request();
+  countReq.input("date", sql.Date, IMPORT_AS_GSU_CUTOFF_DATE);
+  const countResult = await countReq.query(`
+    SELECT COUNT(1) AS total
+    FROM (
+      SELECT
+        ImportItems.InvoiceNumber,
+        ImportItems.InvoiceType
+      FROM (
+        ${groupedQuery}
+      ) AS ImportItems
+      GROUP BY
+        ImportItems.InvoiceNumber,
+        ImportItems.InvoiceType
+    ) AS InvoiceGroups;
+  `);
+  const total = countResult.recordset?.[0]?.total || 0;
+
+  if (total === 0) {
+    return { data: [], total: 0 };
+  }
+
+  const dataReq = pool.request();
+  dataReq.input("date", sql.Date, IMPORT_AS_GSU_CUTOFF_DATE);
+  dataReq.input("offset", sql.Int, offset);
+  dataReq.input("pageSize", sql.Int, ps);
+  const dataResult = await dataReq.query(`
+    ;WITH ImportItems AS (
+      ${groupedQuery}
+    ),
+    InvoiceGroups AS (
+      SELECT
+        InvoiceNumber,
+        InvoiceType
+      FROM ImportItems
+      GROUP BY
+        InvoiceNumber,
+        InvoiceType
+    ),
+    PagedInvoiceGroups AS (
+      SELECT
+        InvoiceNumber,
+        InvoiceType
+      FROM InvoiceGroups
+      ORDER BY
+        InvoiceNumber,
+        InvoiceType
+      OFFSET @offset ROWS
+      FETCH NEXT @pageSize ROWS ONLY
+    )
+    SELECT
+      I.InvoiceNumber,
+      I.InvoiceType,
+      I.ItemName,
+      I.StockCategoryName,
+      I.ItemCode,
+      I.Quantity,
+      I.CODE,
+      I.SumberCode,
+      I.CustomerName,
+      I.IdPembeli
+    FROM PagedInvoiceGroups P
+    INNER JOIN ImportItems I
+      ON (
+        I.InvoiceNumber = P.InvoiceNumber
+        OR (I.InvoiceNumber IS NULL AND P.InvoiceNumber IS NULL)
+      )
+      AND (
+        I.InvoiceType = P.InvoiceType
+        OR (I.InvoiceType IS NULL AND P.InvoiceType IS NULL)
+      )
+    ORDER BY
+      I.InvoiceNumber,
+      I.InvoiceType,
+      I.ItemName,
+      I.ItemCode;
+  `);
+
+  return {
+    data: groupImportAsGsuRowsByInvoice(dataResult.recordset || []),
+    total,
+  };
 }
 
 async function executeImportAsGsu(date, items, username) {
@@ -672,6 +816,7 @@ async function fetchOutputsBarangJadi(noRetur) {
 }
 
 module.exports = {
+  IMPORT_AS_GSU_CUTOFF_DATE,
   getAllReturns,
   getReturnsByDate,
   createReturn,
@@ -680,5 +825,6 @@ module.exports = {
   fetchOutputsFurnitureWip,
   fetchOutputsBarangJadi,
   fetchImportAsGsuByDate,
+  fetchImportAsGsuAfterDate,
   executeImportAsGsu,
 };

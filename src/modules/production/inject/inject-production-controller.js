@@ -31,6 +31,11 @@ function normalizeInjectBatchPayload(source, { noProduksi } = {}) {
   payload.berat = toFloat(payload.berat);
   payload.cycleTime = toFloat(payload.cycleTime);
   payload.counter = toInt(payload.counter);
+  payload.keterangan =
+    typeof payload.keterangan === "string" && payload.keterangan.trim()
+      ? payload.keterangan.trim()
+      : null;
+  payload.isDowntime = Boolean(toBit(payload.isDowntime));
 
   if (Array.isArray(payload.items)) {
     payload.items = payload.items.map((item) => ({
@@ -385,6 +390,11 @@ async function createQc(req, res) {
   const payload = {
     noProduksi: String(body.noProduksi || "").trim(),
     hourStart: normalizeTime(body.hourStart),
+    keterangan:
+      typeof body.keterangan === "string" && body.keterangan.trim()
+        ? body.keterangan.trim()
+        : null,
+    isDowntime: Boolean(toBit(body.isDowntime)),
     jumlahBS:
       jumlahBSRaw === null || jumlahBSRaw === undefined
         ? null
@@ -551,6 +561,15 @@ async function updateQc(req, res) {
   }
   if (Object.prototype.hasOwnProperty.call(body, "hourStart")) {
     payload.hourStart = normalizeTime(body.hourStart);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "keterangan")) {
+    payload.keterangan =
+      typeof body.keterangan === "string" && body.keterangan.trim()
+        ? body.keterangan.trim()
+        : null;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "isDowntime")) {
+    payload.isDowntime = Boolean(toBit(body.isDowntime));
   }
   if (Object.prototype.hasOwnProperty.call(body, "jumlahBS")) {
     payload.jumlahBS =

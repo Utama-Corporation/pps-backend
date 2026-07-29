@@ -1114,6 +1114,8 @@ async function getInjectBatchByNoProduksi(noProduksi) {
       b.CycleTime,
       b.Counter,
       b.DateTimeCreate,
+      b.Keterangan,
+      b.IsDowntime,
       d.Id           AS DetailId,
       d.IdJenis,
       d.OutputCategory,
@@ -1142,6 +1144,8 @@ async function getInjectBatchByNoProduksi(noProduksi) {
         cycleTime: row.CycleTime,
         counter: row.Counter,
         dateTimeCreate: row.DateTimeCreate,
+        keterangan: row.Keterangan ?? null,
+        isDowntime: Boolean(row.IsDowntime),
         items: [],
       });
     }
@@ -1326,6 +1330,8 @@ async function getInjectBatchByNoProduksi(noProduksi) {
       cycleTime: batch.cycleTime == null ? null : Number(batch.cycleTime),
       counter: batch.counter ?? 0,
       dateTimeCreate: batch.dateTimeCreate ?? null,
+      keterangan: batch.keterangan ?? null,
+      isDowntime: Boolean(batch.isDowntime),
       items: batch.items,
       labels: {
         furnitureWip: labels.furnitureWip,
@@ -1354,7 +1360,9 @@ async function getInjectQcByNoProduksi(noProduksi) {
       CycleTime,
       Counter,
       Berat,
-      DateTimeCreate
+      DateTimeCreate,
+      Keterangan,
+      IsDowntime
     FROM dbo.InjectProduksi_QC WITH (NOLOCK)
     WHERE NoProduksi = @NoProduksi
     ORDER BY HourStart ASC, Id ASC;
@@ -1369,6 +1377,8 @@ async function getInjectQcByNoProduksi(noProduksi) {
     counter: row.Counter ?? null,
     berat: row.Berat == null ? null : Number(row.Berat),
     dateTimeCreate: row.DateTimeCreate ?? null,
+    keterangan: row.Keterangan ?? null,
+    isDowntime: Boolean(row.IsDowntime),
   }));
 }
 
@@ -1379,16 +1389,37 @@ async function createInjectQc(payload, ctx) {
   const hourStart = normalizeBatchHourStart(payload?.hourStart);
   if (!hourStart) throw badReq("hourStart harus format HH:mm atau HH:mm:ss");
 
+  const keteranganRaw = payload?.keterangan;
+  const keterangan =
+    typeof keteranganRaw === "string" && keteranganRaw.trim()
+      ? keteranganRaw.trim()
+      : null;
+  if (keterangan && keterangan.length > 500) {
+    throw badReq("keterangan maksimal 500 karakter");
+  }
+
+  const isDowntime = Boolean(payload?.isDowntime);
+  if (isDowntime && !keterangan) {
+    throw badReq("keterangan wajib diisi bila isDowntime true");
+  }
+
   const jumlahBS =
-    payload?.jumlahBS === null || payload?.jumlahBS === undefined
+    isDowntime
+      ? 0
+      : payload?.jumlahBS === null || payload?.jumlahBS === undefined
       ? null
       : Number(payload.jumlahBS);
-  if (jumlahBS == null || !Number.isFinite(jumlahBS) || jumlahBS < 0) {
+  if (
+    !isDowntime &&
+    (jumlahBS == null || !Number.isFinite(jumlahBS) || jumlahBS < 0)
+  ) {
     throw badReq("jumlahBS harus angka >= 0");
   }
 
   const cycleTime =
-    payload?.cycleTime === null || payload?.cycleTime === undefined
+    isDowntime
+      ? null
+      : payload?.cycleTime === null || payload?.cycleTime === undefined
       ? null
       : Number(payload.cycleTime);
   if (cycleTime != null && (!Number.isFinite(cycleTime) || cycleTime < 0)) {
@@ -1396,7 +1427,9 @@ async function createInjectQc(payload, ctx) {
   }
 
   const counter =
-    payload?.counter === null || payload?.counter === undefined
+    isDowntime
+      ? null
+      : payload?.counter === null || payload?.counter === undefined
       ? null
       : Number(payload.counter);
   if (counter != null && (!Number.isInteger(counter) || counter < 0)) {
@@ -1404,7 +1437,9 @@ async function createInjectQc(payload, ctx) {
   }
 
   const berat =
-    payload?.berat === null || payload?.berat === undefined
+    isDowntime
+      ? null
+      : payload?.berat === null || payload?.berat === undefined
       ? null
       : Number(payload.berat);
   if (berat != null && (!Number.isFinite(berat) || berat < 0)) {
@@ -1479,7 +1514,9 @@ async function createInjectQc(payload, ctx) {
       )
       .input("Counter", sql.Int, counter)
       .input("Berat", sql.Decimal(18, 3), berat == null ? null : berat)
-      .input("DateTimeCreate", sql.DateTime, nowDateTime).query(`
+      .input("DateTimeCreate", sql.DateTime, nowDateTime)
+      .input("Keterangan", sql.NVarChar(500), keterangan)
+      .input("IsDowntime", sql.Bit, isDowntime).query(`
         DECLARE @out TABLE (
           Id int,
           NoProduksi varchar(50),
@@ -1488,11 +1525,13 @@ async function createInjectQc(payload, ctx) {
           CycleTime decimal(10,2),
           Counter int,
           Berat decimal(18,3),
-          DateTimeCreate datetime
+          DateTimeCreate datetime,
+          Keterangan nvarchar(500),
+          IsDowntime bit
         );
 
         INSERT INTO dbo.InjectProduksi_QC (
-          NoProduksi, HourStart, JumlahBS, CycleTime, Counter, Berat, DateTimeCreate
+          NoProduksi, HourStart, JumlahBS, CycleTime, Counter, Berat, DateTimeCreate, Keterangan, IsDowntime
         )
         OUTPUT
           INSERTED.Id,
@@ -1502,10 +1541,12 @@ async function createInjectQc(payload, ctx) {
           INSERTED.CycleTime,
           INSERTED.Counter,
           INSERTED.Berat,
-          INSERTED.DateTimeCreate
+          INSERTED.DateTimeCreate,
+          INSERTED.Keterangan,
+          INSERTED.IsDowntime
         INTO @out
         VALUES (
-          @NoProduksi, @HourStart, @JumlahBS, @CycleTime, @Counter, @Berat, @DateTimeCreate
+          @NoProduksi, @HourStart, @JumlahBS, @CycleTime, @Counter, @Berat, @DateTimeCreate, @Keterangan, @IsDowntime
         );
 
         SELECT * FROM @out;
@@ -1542,6 +1583,8 @@ async function createInjectQc(payload, ctx) {
       counter: row.Counter ?? null,
       berat: row.Berat == null ? null : Number(row.Berat),
       dateTimeCreate: row.DateTimeCreate ?? null,
+      keterangan: row.Keterangan ?? null,
+      isDowntime: Boolean(row.IsDowntime),
     };
   } catch (error) {
     try {
@@ -1558,61 +1601,100 @@ async function updateInjectQc(id, payload, ctx) {
   }
 
   const updates = {};
+  const hasIsDowntime = Object.prototype.hasOwnProperty.call(
+    payload,
+    "isDowntime",
+  );
+  const isDowntimeUpdate = hasIsDowntime && Boolean(payload?.isDowntime);
 
-  if (Object.prototype.hasOwnProperty.call(payload, "noProduksi")) {
-    const noProduksi = String(payload?.noProduksi || "").trim();
-    if (!noProduksi) throw badReq("noProduksi tidak boleh kosong");
-    updates.noProduksi = noProduksi;
-  }
-
-  if (Object.prototype.hasOwnProperty.call(payload, "hourStart")) {
-    const hourStart = normalizeBatchHourStart(payload?.hourStart);
-    if (!hourStart) throw badReq("hourStart harus format HH:mm atau HH:mm:ss");
-    updates.hourStart = hourStart.slice(0, 5);
-  }
-
-  if (Object.prototype.hasOwnProperty.call(payload, "jumlahBS")) {
-    const jumlahBS =
-      payload?.jumlahBS === null || payload?.jumlahBS === undefined
-        ? null
-        : Number(payload.jumlahBS);
-    if (jumlahBS == null || !Number.isFinite(jumlahBS) || jumlahBS < 0) {
-      throw badReq("jumlahBS harus angka >= 0");
+  if (isDowntimeUpdate) {
+    const keterangan =
+      typeof payload?.keterangan === "string" && payload.keterangan.trim()
+        ? payload.keterangan.trim()
+        : null;
+    if (!keterangan) {
+      throw badReq("keterangan wajib diisi bila isDowntime true");
     }
-    updates.jumlahBS = jumlahBS;
-  }
-
-  if (Object.prototype.hasOwnProperty.call(payload, "cycleTime")) {
-    const cycleTime =
-      payload?.cycleTime === null || payload?.cycleTime === undefined
-        ? null
-        : Number(payload.cycleTime);
-    if (cycleTime != null && (!Number.isFinite(cycleTime) || cycleTime < 0)) {
-      throw badReq("cycleTime harus angka >= 0");
+    if (keterangan.length > 500) {
+      throw badReq("keterangan maksimal 500 karakter");
     }
-    updates.cycleTime = cycleTime;
-  }
-
-  if (Object.prototype.hasOwnProperty.call(payload, "counter")) {
-    const counter =
-      payload?.counter === null || payload?.counter === undefined
-        ? null
-        : Number(payload.counter);
-    if (counter != null && (!Number.isInteger(counter) || counter < 0)) {
-      throw badReq("counter harus integer >= 0");
+    updates.jumlahBS = 0;
+    updates.cycleTime = null;
+    updates.counter = null;
+    updates.berat = null;
+    updates.keterangan = keterangan;
+    updates.isDowntime = true;
+  } else {
+    if (Object.prototype.hasOwnProperty.call(payload, "noProduksi")) {
+      const noProduksi = String(payload?.noProduksi || "").trim();
+      if (!noProduksi) throw badReq("noProduksi tidak boleh kosong");
+      updates.noProduksi = noProduksi;
     }
-    updates.counter = counter;
-  }
 
-  if (Object.prototype.hasOwnProperty.call(payload, "berat")) {
-    const berat =
-      payload?.berat === null || payload?.berat === undefined
-        ? null
-        : Number(payload.berat);
-    if (berat != null && (!Number.isFinite(berat) || berat < 0)) {
-      throw badReq("berat harus angka >= 0");
+    if (Object.prototype.hasOwnProperty.call(payload, "hourStart")) {
+      const hourStart = normalizeBatchHourStart(payload?.hourStart);
+      if (!hourStart) throw badReq("hourStart harus format HH:mm atau HH:mm:ss");
+      updates.hourStart = hourStart.slice(0, 5);
     }
-    updates.berat = berat;
+
+    if (Object.prototype.hasOwnProperty.call(payload, "jumlahBS")) {
+      const jumlahBS =
+        payload?.jumlahBS === null || payload?.jumlahBS === undefined
+          ? null
+          : Number(payload.jumlahBS);
+      if (jumlahBS == null || !Number.isFinite(jumlahBS) || jumlahBS < 0) {
+        throw badReq("jumlahBS harus angka >= 0");
+      }
+      updates.jumlahBS = jumlahBS;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(payload, "cycleTime")) {
+      const cycleTime =
+        payload?.cycleTime === null || payload?.cycleTime === undefined
+          ? null
+          : Number(payload.cycleTime);
+      if (cycleTime != null && (!Number.isFinite(cycleTime) || cycleTime < 0)) {
+        throw badReq("cycleTime harus angka >= 0");
+      }
+      updates.cycleTime = cycleTime;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(payload, "counter")) {
+      const counter =
+        payload?.counter === null || payload?.counter === undefined
+          ? null
+          : Number(payload.counter);
+      if (counter != null && (!Number.isInteger(counter) || counter < 0)) {
+        throw badReq("counter harus integer >= 0");
+      }
+      updates.counter = counter;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(payload, "berat")) {
+      const berat =
+        payload?.berat === null || payload?.berat === undefined
+          ? null
+          : Number(payload.berat);
+      if (berat != null && (!Number.isFinite(berat) || berat < 0)) {
+        throw badReq("berat harus angka >= 0");
+      }
+      updates.berat = berat;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(payload, "keterangan")) {
+      const keterangan =
+        typeof payload?.keterangan === "string" && payload.keterangan.trim()
+          ? payload.keterangan.trim()
+          : null;
+      if (keterangan && keterangan.length > 500) {
+        throw badReq("keterangan maksimal 500 karakter");
+      }
+      updates.keterangan = keterangan;
+    }
+
+    if (hasIsDowntime) {
+      updates.isDowntime = false;
+    }
   }
 
   if (Object.keys(updates).length === 0) {
@@ -1675,6 +1757,14 @@ async function updateInjectQc(id, payload, ctx) {
       setClauses.push("Berat = @Berat");
       request.input("Berat", sql.Decimal(18, 3), updates.berat);
     }
+    if (Object.prototype.hasOwnProperty.call(updates, "keterangan")) {
+      setClauses.push("Keterangan = @Keterangan");
+      request.input("Keterangan", sql.NVarChar(500), updates.keterangan);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, "isDowntime")) {
+      setClauses.push("IsDowntime = @IsDowntime");
+      request.input("IsDowntime", sql.Bit, updates.isDowntime);
+    }
 
     const updateRes = await request.query(`
       UPDATE dbo.InjectProduksi_QC
@@ -1687,7 +1777,9 @@ async function updateInjectQc(id, payload, ctx) {
         INSERTED.CycleTime,
         INSERTED.Counter,
         INSERTED.Berat,
-        INSERTED.DateTimeCreate
+        INSERTED.DateTimeCreate,
+        INSERTED.Keterangan,
+        INSERTED.IsDowntime
       WHERE Id = @Id;
     `);
 
@@ -1703,6 +1795,8 @@ async function updateInjectQc(id, payload, ctx) {
       counter: row.Counter ?? null,
       berat: row.Berat == null ? null : Number(row.Berat),
       dateTimeCreate: row.DateTimeCreate ?? null,
+      keterangan: row.Keterangan ?? null,
+      isDowntime: Boolean(row.IsDowntime),
     };
   } catch (error) {
     try {
@@ -2086,14 +2180,44 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
     return parsed;
   };
 
-  const berat = toNonNegativeFloat(payload?.berat, "berat");
-  const cycleTime = toNonNegativeFloat(payload?.cycleTime, "cycleTime");
-  const counter = toNonNegativeInt(payload?.counter, "counter");
+  const keteranganRaw = payload?.keterangan;
+  const keterangan =
+    typeof keteranganRaw === "string" && keteranganRaw.trim()
+      ? keteranganRaw.trim()
+      : null;
+  if (keterangan && keterangan.length > 500) {
+    throw badReq("keterangan maksimal 500 karakter");
+  }
 
-  if (!Array.isArray(payload?.items) || payload.items.length === 0) {
+  // Mesin berhenti (mis. listrik padam) = tidak ada produksi sama sekali di
+  // batch ini. Abaikan seluruh payload produksi dan hanya catat downtime
+  // beserta keterangannya.
+  const isDowntime = Boolean(payload?.isDowntime);
+  if (isDowntime && !keterangan) {
+    throw badReq("keterangan wajib diisi bila isDowntime true");
+  }
+
+  // Kolom numerik batch masih NOT NULL di database, sehingga downtime
+  // disimpan dengan nilai netral tanpa divalidasi atau diproses lebih lanjut.
+  const berat = isDowntime
+    ? 0
+    : toNonNegativeFloat(payload?.berat, "berat");
+  const cycleTime = isDowntime
+    ? 0
+    : toNonNegativeFloat(payload?.cycleTime, "cycleTime");
+  const counter = isDowntime
+    ? 0
+    : toNonNegativeInt(payload?.counter, "counter");
+
+  const itemsInput = isDowntime
+    ? []
+    : Array.isArray(payload?.items)
+      ? payload.items
+      : [];
+  if (itemsInput.length === 0 && !isDowntime) {
     throw badReq("items wajib berupa array minimal 1 elemen");
   }
-  const items = payload.items.map((item, idx) => {
+  const items = itemsInput.map((item, idx) => {
     const label = `items[${idx}]`;
     const idJenisRaw = item?.idJenis;
     const idJenis =
@@ -2120,8 +2244,8 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
     throw badReq("items tidak boleh memiliki idJenis yang duplikat");
   }
 
-  const bonggolan = payload?.bonggolan ?? null;
-  const reject = payload?.reject ?? null;
+  const bonggolan = isDowntime ? null : (payload?.bonggolan ?? null);
+  const reject = isDowntime ? null : (payload?.reject ?? null);
   const isLastBatch = Boolean(bonggolan || reject || forceClose);
 
   if (bonggolan) {
@@ -2225,12 +2349,14 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
     }
 
     const docDateOnly = toDateOnly(header.TglProduksi);
-    await assertNotLocked({
-      date: docDateOnly,
-      runner: tx,
-      action: `submit batch InjectProduksi ${noProduksi}`,
-      useLock: true,
-    });
+    if (!isDowntime) {
+      await assertNotLocked({
+        date: docDateOnly,
+        runner: tx,
+        action: `submit batch InjectProduksi ${noProduksi}`,
+        useLock: true,
+      });
+    }
 
     if (bonggolan) {
       const bonggolanRes = await new sql.Request(tx).input(
@@ -2279,7 +2405,7 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
     }
 
     const idMesin = header.IdMesin ?? null;
-    if (idMesin) {
+    if (!isDowntime && idMesin) {
       const mesinRes = await new sql.Request(tx).input(
         "IdMesin",
         sql.Int,
@@ -2300,10 +2426,12 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
     }
 
     const nowDateTime = new Date();
-    const lokasi = await getBlokLokasiFromKodeProduksi({
-      kode: noProduksi,
-      runner: tx,
-    });
+    const lokasi = isDowntime
+      ? null
+      : await getBlokLokasiFromKodeProduksi({
+          kode: noProduksi,
+          runner: tx,
+        });
 
     const batchInsertRes = await new sql.Request(tx)
       .input("NoProduksi", sql.VarChar(50), noProduksi)
@@ -2312,15 +2440,17 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
       .input("CycleTime", sql.Decimal(18, 3), cycleTime)
       .input("Counter", sql.Int, counter)
       .input("PcsInput", sql.Int, totalPcsInput)
-      .input("DateTimeCreate", sql.DateTime, nowDateTime).query(`
+      .input("DateTimeCreate", sql.DateTime, nowDateTime)
+      .input("Keterangan", sql.NVarChar(500), keterangan)
+      .input("IsDowntime", sql.Bit, isDowntime).query(`
         DECLARE @out TABLE (Id int, HourStart time(7));
 
         INSERT INTO dbo.InjectProduksiBatch (
-          NoProduksi, HourStart, Berat, CycleTime, Counter, PcsInput, DateTimeCreate
+          NoProduksi, HourStart, Berat, CycleTime, Counter, PcsInput, DateTimeCreate, Keterangan, IsDowntime
         )
         OUTPUT INSERTED.Id, INSERTED.HourStart INTO @out
         VALUES (
-          @NoProduksi, CAST(@HourStart AS time(7)), @Berat, @CycleTime, @Counter, @PcsInput, @DateTimeCreate
+          @NoProduksi, CAST(@HourStart AS time(7)), @Berat, @CycleTime, @Counter, @PcsInput, @DateTimeCreate, @Keterangan, @IsDowntime
         );
 
         SELECT Id, CONVERT(varchar(8), HourStart, 108) AS HourStart
@@ -2329,6 +2459,23 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
 
     const batchRow = batchInsertRes.recordset?.[0] || {};
     const idBatch = batchRow.Id;
+
+    if (isDowntime) {
+      await tx.commit();
+      return {
+        batch: {
+          id: batchRow.Id ?? null,
+          hourStart: formatHourStartForResponse(batchRow.HourStart || hourStart),
+          keterangan,
+          isDowntime: true,
+        },
+        outputCategory: header.OutputCategory ?? null,
+        furnitureWIP: [],
+        barangJadi: [],
+        bonggolan: null,
+        reject: null,
+      };
+    }
 
     const furnitureWIP = [];
     const barangJadi = [];
@@ -2562,6 +2709,8 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
       batch: {
         id: batchRow.Id ?? null,
         hourStart: formatHourStartForResponse(batchRow.HourStart || hourStart),
+        keterangan,
+        isDowntime,
       },
       outputCategory: header.OutputCategory ?? null,
       furnitureWIP,

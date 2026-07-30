@@ -2348,9 +2348,8 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
       const outputCategory = String(
         pcsInfo.outputCategory || header.OutputCategory || "",
       ).toLowerCase();
-      const outputCategoryDb = normalizeOutputCategoryForPending(
-        outputCategory,
-      );
+      const outputCategoryDb =
+        normalizeOutputCategoryForPending(outputCategory);
 
       const pcsPerLabelStandar = Number(pcsInfo.pcsPerLabel);
       if (!Number.isFinite(pcsPerLabelStandar) || pcsPerLabelStandar <= 0) {
@@ -2369,9 +2368,7 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
               outputCategory: outputCategoryDb,
             })
           : null;
-      const pcsPerLabelAwal = pendingRow
-        ? Number(pendingRow.PcsPending)
-        : null;
+      const pcsPerLabelAwal = pendingRow ? Number(pendingRow.PcsPending) : null;
 
       const totalPcs = item.carryOverIn + item.pcsInput;
 
@@ -2478,11 +2475,21 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
         // defisit lama yang masih menggantung (belum sempat terpakai sesi
         // ini, mis. totalPcs sesi ini tidak pernah mencapai target awal).
         const defisit = pcsPerLabelStandar - partialPcs;
-        const hasUntouchedPending = pcsPerLabelAwal != null && !pendingConsumedThisCall;
-        if (idMesin && item.idJenis != null && defisit > 0 && !hasUntouchedPending) {
+        const hasUntouchedPending =
+          pcsPerLabelAwal != null && !pendingConsumedThisCall;
+        if (
+          idMesin &&
+          item.idJenis != null &&
+          defisit > 0 &&
+          !hasUntouchedPending
+        ) {
           await upsertPendingPcsPerLabelDeficit(
             tx,
-            { idMesin, idJenis: item.idJenis, outputCategory: outputCategoryDb },
+            {
+              idMesin,
+              idJenis: item.idJenis,
+              outputCategory: outputCategoryDb,
+            },
             defisit,
             noProduksi,
             nowDateTime,
@@ -2881,7 +2888,9 @@ async function approveCompleteInjectProduksi(noProduksi, ctx) {
 
     const row = checkRes.recordset[0];
     if (row.CompleteRequestStatus !== "PENDING") {
-      throw conflict(`Produksi ${no} tidak punya request approval yang pending.`);
+      throw conflict(
+        `Produksi ${no} tidak punya request approval yang pending.`,
+      );
     }
     if (row.CompleteRequestedBy === actorIdNum) {
       throw forbidden("Tidak boleh approve request completion milik sendiri.");
@@ -3737,7 +3746,8 @@ async function updateInjectProduksiTanggal(noProduksi, tglProduksi, ctx) {
       SELECT * FROM dbo.InjectProduksi_h WHERE NoProduksi = @NoProduksi;
     `);
     const updatedHeader = updRes.recordset?.[0] || null;
-    if (!updatedHeader) throw notFound(`NoProduksi tidak ditemukan: ${noProduksi}`);
+    if (!updatedHeader)
+      throw notFound(`NoProduksi tidak ditemukan: ${noProduksi}`);
 
     const rqCascade = new sql.Request(tx);
     rqCascade

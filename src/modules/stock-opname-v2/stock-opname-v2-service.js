@@ -280,6 +280,8 @@ async function getAllKategoriWithStatus({ year, month } = {}) {
           scannedCount: 0,
           startDate: null,
           completedAt: null,
+          workingLocationCount: 0,
+          workingLocations: [],
         };
       }
 
@@ -310,6 +312,39 @@ async function getAllKategoriWithStatus({ year, month } = {}) {
         scannedCount = countRes.recordset?.[0]?.scannedCount || 0;
       }
 
+      // Lokasi yang sedang dikerjakan (masih ada penugasan aktif) untuk sesi
+      // stock opname ini — baris di MstUserLokasiAccess selalu berarti
+      // "masih berjalan" (lihat catatan di listLokasiByUser).
+      const workingRes = await pool
+        .request()
+        .input("stockOpnameNo", sql.VarChar, row.NoSO).query(`
+          SELECT a.Blok, a.IdLokasi, l.Description AS description,
+            a.IdUsername, u.Username, u.FName, u.LName
+          FROM [dbo].[MstUserLokasiAccess] a
+          LEFT JOIN [dbo].[MstUsername] u ON u.IdUsername = a.IdUsername
+          LEFT JOIN [dbo].[MstLokasi] l ON l.Blok = a.Blok AND l.IdLokasi = a.IdLokasi
+          WHERE a.NoSO = @stockOpnameNo
+          ORDER BY a.Blok ASC, a.IdLokasi ASC, u.Username ASC;
+        `);
+
+      const workingLocationsMap = new Map();
+      for (const wr of workingRes.recordset || []) {
+        const key = `${wr.Blok}${wr.IdLokasi}`;
+        if (!workingLocationsMap.has(key)) {
+          workingLocationsMap.set(key, {
+            lokasi: key,
+            description: wr.description ?? null,
+            users: [],
+          });
+        }
+        workingLocationsMap.get(key).users.push({
+          idUsername: wr.IdUsername,
+          username: wr.Username,
+          fullName: [wr.FName, wr.LName].filter(Boolean).join(" ") || null,
+        });
+      }
+      const workingLocations = Array.from(workingLocationsMap.values());
+
       return {
         ...base,
         stockOpnameNo: row.NoSO,
@@ -320,6 +355,8 @@ async function getAllKategoriWithStatus({ year, month } = {}) {
         scannedCount,
         startDate: row.Tanggal ?? null,
         completedAt: row.DateComplete ?? null,
+        workingLocationCount: workingLocations.length,
+        workingLocations,
       };
     }),
   );
@@ -1077,15 +1114,60 @@ async function getAllBlok({ stockOpnameNo }) {
       GROUP BY src.Blok;
     `);
 
+  // Lokasi yang sedang dikerjakan (masih ada penugasan aktif) per blok —
+  // baris di MstUserLokasiAccess untuk NoSO ini selalu berarti "masih berjalan"
+  // (lihat catatan di listLokasiByUser).
+  const workingRes = await pool
+    .request()
+    .input("stockOpnameNo", sql.VarChar, no)
+    .query(`
+      SELECT a.Blok, a.IdLokasi, l.Description AS description,
+        a.IdUsername, u.Username, u.FName, u.LName
+      FROM [dbo].[MstUserLokasiAccess] a
+      LEFT JOIN [dbo].[MstUsername] u ON u.IdUsername = a.IdUsername
+      LEFT JOIN [dbo].[MstLokasi] l ON l.Blok = a.Blok AND l.IdLokasi = a.IdLokasi
+      WHERE a.NoSO = @stockOpnameNo
+      ORDER BY a.Blok ASC, a.IdLokasi ASC, u.Username ASC;
+    `);
+
+  const workingLocationsByBlok = new Map();
+  for (const row of workingRes.recordset || []) {
+    const blokKey = row.Blok ?? UNKNOWN_BLOK_CODE;
+    if (!workingLocationsByBlok.has(blokKey)) {
+      workingLocationsByBlok.set(blokKey, new Map());
+    }
+    const locMap = workingLocationsByBlok.get(blokKey);
+    if (!locMap.has(row.IdLokasi)) {
+      locMap.set(row.IdLokasi, {
+        lokasi: `${row.Blok}${row.IdLokasi}`,
+        description: row.description ?? null,
+        users: [],
+      });
+    }
+    locMap.get(row.IdLokasi).users.push({
+      idUsername: row.IdUsername,
+      username: row.Username,
+      fullName: [row.FName, row.LName].filter(Boolean).join(" ") || null,
+    });
+  }
+
   // Blok tidak diketahui: seluruh label tanpa Blok tercatat digabung jadi
   // satu bucket "Lokasi Tidak Diketahui" (IdLokasi tidak relevan tanpa Blok).
-  const bloks = (res.recordset || []).map((r) => ({
-    blok: r.blok ?? UNKNOWN_BLOK_CODE,
-    locationCount: r.blok === null ? 1 : r.locationCount,
-    labelCount: r.labelCount,
-    scannedCount: r.scannedCount,
-    ...(showWeight ? { totalWeight: r.totalWeight } : { totalPcs: r.totalPcs }),
-  }));
+  const bloks = (res.recordset || []).map((r) => {
+    const blokKey = r.blok ?? UNKNOWN_BLOK_CODE;
+    const workingLocations = Array.from(
+      workingLocationsByBlok.get(blokKey)?.values() || [],
+    );
+    return {
+      blok: blokKey,
+      locationCount: r.blok === null ? 1 : r.locationCount,
+      labelCount: r.labelCount,
+      scannedCount: r.scannedCount,
+      ...(showWeight ? { totalWeight: r.totalWeight } : { totalPcs: r.totalPcs }),
+      workingLocationCount: workingLocations.length,
+      workingLocations,
+    };
+  });
 
   bloks.sort((a, b) => {
     if (a.blok === UNKNOWN_BLOK_CODE) return 1;

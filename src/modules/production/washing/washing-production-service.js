@@ -89,6 +89,7 @@ async function getAllProduksi(
   shift = null,
   complete = null,
   verified = null,
+  includeRendemen = false,
 ) {
   const pool = await poolPromise;
 
@@ -106,7 +107,14 @@ async function getAllProduksi(
       AND (@complete IS NULL OR h.IsComplete = @complete)
       AND (
         @verified IS NULL
-        OR (CASE WHEN h.VerifiedAt IS NOT NULL THEN 1 ELSE 0 END) = @verified
+        OR (
+          CASE
+            WHEN h.SCVerifiedAt IS NOT NULL
+             AND h.PCVerifiedAt IS NOT NULL
+             AND h.DeptHeadVerifiedAt IS NOT NULL
+            THEN 1 ELSE 0
+          END
+        ) = @verified
       )
   `;
 
@@ -131,6 +139,75 @@ async function getAllProduksi(
   if (total === 0) return { data: [], total: 0 };
 
   // 2) Data halaman + Flag Tutup Transaksi (ambil lastClosed sekali)
+  //    Rendemen (opsional, hanya dihitung kalau includeRendemen=true — ada
+  //    beberapa correlated subquery SUM per baris, jadi jangan dieksekusi
+  //    kalau tidak diminta caller).
+  const rendemenSelect = includeRendemen
+    ? `,
+      rd.TotalInputBerat,
+      rd.TotalOutputBerat,
+      CASE
+        WHEN rd.TotalInputBerat > 0
+        THEN CAST(ROUND(rd.TotalOutputBerat / rd.TotalInputBerat * 100, 2) AS decimal(9,2))
+        ELSE NULL
+      END AS Rendemen
+    `
+    : "";
+
+  const rendemenApply = includeRendemen
+    ? `
+    OUTER APPLY (
+      SELECT
+        (
+          ISNULL((
+            SELECT SUM(wd.Berat)
+            FROM dbo.WashingProduksiInputWashing iw WITH (NOLOCK)
+            LEFT JOIN dbo.Washing_d wd WITH (NOLOCK)
+              ON wd.NoWashing = iw.NoWashing AND wd.NoSak = iw.NoSak
+            WHERE iw.NoProduksi = h.NoProduksi
+          ), 0)
+          + ISNULL((
+            SELECT SUM(bb.Berat)
+            FROM dbo.WashingProduksiInput ibb WITH (NOLOCK)
+            LEFT JOIN dbo.BahanBaku_d bb WITH (NOLOCK)
+              ON bb.NoBahanBaku = ibb.NoBahanBaku
+             AND bb.NoPallet    = ibb.NoPallet
+             AND bb.NoSak       = ibb.NoSak
+            WHERE ibb.NoProduksi = h.NoProduksi
+          ), 0)
+          + ISNULL((
+            SELECT SUM(pdet.Berat)
+            FROM dbo.WashingProduksiInputBBPartial pmap WITH (NOLOCK)
+            LEFT JOIN dbo.BahanBakuPartial pdet WITH (NOLOCK)
+              ON pdet.NoBBPartial = pmap.NoBBPartial
+            WHERE pmap.NoProduksi = h.NoProduksi
+          ), 0)
+          + ISNULL((
+            SELECT SUM(g.Berat)
+            FROM dbo.WashingProduksiInputGilingan ig WITH (NOLOCK)
+            LEFT JOIN dbo.Gilingan g WITH (NOLOCK)
+              ON g.NoGilingan = ig.NoGilingan
+            WHERE ig.NoProduksi = h.NoProduksi
+          ), 0)
+          + ISNULL((
+            SELECT SUM(gdet.Berat)
+            FROM dbo.WashingProduksiInputGilinganPartial gmap WITH (NOLOCK)
+            LEFT JOIN dbo.GilinganPartial gdet WITH (NOLOCK)
+              ON gdet.NoGilinganPartial = gmap.NoGilinganPartial
+            WHERE gmap.NoProduksi = h.NoProduksi
+          ), 0)
+        ) AS TotalInputBerat,
+        ISNULL((
+          SELECT SUM(wd.Berat)
+          FROM dbo.WashingProduksiOutput o WITH (NOLOCK)
+          LEFT JOIN dbo.Washing_d wd WITH (NOLOCK)
+            ON wd.NoWashing = o.NoWashing AND wd.NoSak = o.NoSak
+          WHERE o.NoProduksi = h.NoProduksi
+        ), 0) AS TotalOutputBerat
+    ) rd
+    `
+    : "";
+
   const dataQry = `
     ;WITH LastClosed AS (
       SELECT TOP 1
@@ -185,10 +262,12 @@ async function getAllProduksi(
       h.JamKerja,
       h.Shift,
       h.IsComplete,
-      CASE WHEN h.VerifiedAt IS NOT NULL THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Verified,
-      h.VerifiedBy,
-      h.VerifiedAt,
-      h.VerifiedNote,
+      h.SCVerifiedBy,
+      h.SCVerifiedAt,
+      h.PCVerifiedBy,
+      h.PCVerifiedAt,
+      h.DeptHeadVerifiedBy,
+      h.DeptHeadVerifiedAt,
       h.CreateBy,
       h.CheckBy1,
       h.CheckBy2,
@@ -212,6 +291,7 @@ async function getAllProduksi(
         THEN CAST(1 AS bit)
         ELSE CAST(0 AS bit)
       END AS IsLocked
+      ${rendemenSelect}
 
     FROM dbo.WashingProduksi_h h WITH (NOLOCK)
     LEFT JOIN dbo.MstMesin     ms WITH (NOLOCK) ON ms.IdMesin    = h.IdMesin
@@ -223,6 +303,8 @@ async function getAllProduksi(
       SELECT TOP 1 LastClosedDate
       FROM LastClosed
     ) lc
+
+    ${rendemenApply}
 
     ${whereClause}
 
@@ -275,7 +357,10 @@ async function getProduksiByDate(date) {
       h.NoProduksi, h.IdOperator, h.IdMesin, m.NamaMesin,
       h.TglProduksi, h.JamKerja, h.Shift, h.CreateBy,
       h.CheckBy1, h.CheckBy2, h.ApproveBy,
-      h.JmlhAnggota, h.Hadir, h.HourMeter, h.IsBlower, h.IsComplete
+      h.JmlhAnggota, h.Hadir, h.HourMeter, h.IsBlower, h.IsComplete,
+      h.SCVerifiedBy, h.SCVerifiedAt,
+      h.PCVerifiedBy, h.PCVerifiedAt,
+      h.DeptHeadVerifiedBy, h.DeptHeadVerifiedAt
     FROM WashingProduksi_h h
     LEFT JOIN MstMesin m ON h.IdMesin = m.IdMesin
     WHERE CONVERT(date, h.TglProduksi) = @date
@@ -1251,7 +1336,7 @@ async function completeWashingProduksi(noProduksi, ctx) {
   }
 }
 
-async function verifyWashingProduksi(noProduksi, ctx, note) {
+async function verifyWashingProduksiSC(noProduksi, ctx) {
   const no = String(noProduksi || "").trim();
   if (!no) throw badReq("noProduksi wajib");
 
@@ -1262,7 +1347,6 @@ async function verifyWashingProduksi(noProduksi, ctx, note) {
 
   const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
   const requestId = String(ctx?.requestId || "").trim();
-  const verifyNote = String(note || "").trim() || null;
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
@@ -1280,7 +1364,7 @@ async function verifyWashingProduksi(noProduksi, ctx, note) {
       sql.VarChar(50),
       no,
     ).query(`
-        SELECT TOP 1 NoProduksi, IsComplete, VerifiedAt
+        SELECT TOP 1 NoProduksi, IsComplete, SCVerifiedAt
         FROM dbo.WashingProduksi_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoProduksi = @NoProduksi;
       `);
@@ -1293,18 +1377,16 @@ async function verifyWashingProduksi(noProduksi, ctx, note) {
       throw conflict(`Produksi ${no} belum complete, tidak bisa diverifikasi.`);
     }
 
-    if (checkRes.recordset[0].VerifiedAt) {
+    if (checkRes.recordset[0].SCVerifiedAt) {
       throw conflict(`Produksi ${no} sudah diverifikasi.`);
     }
 
     await new sql.Request(tx)
       .input("NoProduksi", sql.VarChar(50), no)
-      .input("ActorId", sql.Int, Math.trunc(actorIdNum))
-      .input("Note", sql.NVarChar(500), verifyNote).query(`
+      .input("ActorId", sql.Int, Math.trunc(actorIdNum)).query(`
         UPDATE dbo.WashingProduksi_h
-        SET VerifiedBy = @ActorId,
-            VerifiedAt = SYSUTCDATETIME(),
-            VerifiedNote = @Note
+        SET SCVerifiedBy = @ActorId,
+            SCVerifiedAt = SYSUTCDATETIME()
         WHERE NoProduksi = @NoProduksi;
       `);
 
@@ -1313,8 +1395,7 @@ async function verifyWashingProduksi(noProduksi, ctx, note) {
     return {
       noProduksi: no,
       verified: true,
-      verifiedBy: Math.trunc(actorIdNum),
-      verifiedNote: verifyNote,
+      scVerifiedBy: Math.trunc(actorIdNum),
     };
   } catch (error) {
     try {
@@ -1324,7 +1405,7 @@ async function verifyWashingProduksi(noProduksi, ctx, note) {
   }
 }
 
-async function unverifyWashingProduksi(noProduksi, ctx, note) {
+async function unverifyWashingProduksiSC(noProduksi, ctx) {
   const no = String(noProduksi || "").trim();
   if (!no) throw badReq("noProduksi wajib");
 
@@ -1335,7 +1416,6 @@ async function unverifyWashingProduksi(noProduksi, ctx, note) {
 
   const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
   const requestId = String(ctx?.requestId || "").trim();
-  const unverifyNote = String(note || "").trim() || null;
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
@@ -1353,7 +1433,7 @@ async function unverifyWashingProduksi(noProduksi, ctx, note) {
       sql.VarChar(50),
       no,
     ).query(`
-        SELECT TOP 1 NoProduksi, VerifiedAt
+        SELECT TOP 1 NoProduksi, SCVerifiedAt
         FROM dbo.WashingProduksi_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoProduksi = @NoProduksi;
       `);
@@ -1362,17 +1442,14 @@ async function unverifyWashingProduksi(noProduksi, ctx, note) {
       throw notFound(`NoProduksi tidak ditemukan: ${no}`);
     }
 
-    if (!checkRes.recordset[0].VerifiedAt) {
+    if (!checkRes.recordset[0].SCVerifiedAt) {
       throw conflict(`Produksi ${no} belum diverifikasi.`);
     }
 
-    await new sql.Request(tx)
-      .input("NoProduksi", sql.VarChar(50), no)
-      .input("Note", sql.NVarChar(500), unverifyNote).query(`
+    await new sql.Request(tx).input("NoProduksi", sql.VarChar(50), no).query(`
         UPDATE dbo.WashingProduksi_h
-        SET VerifiedBy = NULL,
-            VerifiedAt = NULL,
-            VerifiedNote = @Note
+        SET SCVerifiedBy = NULL,
+            SCVerifiedAt = NULL
         WHERE NoProduksi = @NoProduksi;
       `);
 
@@ -1381,7 +1458,278 @@ async function unverifyWashingProduksi(noProduksi, ctx, note) {
     return {
       noProduksi: no,
       verified: false,
-      verifiedNote: unverifyNote,
+    };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
+  }
+}
+
+async function verifyWashingProduksiPC(noProduksi, ctx) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const checkRes = await new sql.Request(tx).input(
+      "NoProduksi",
+      sql.VarChar(50),
+      no,
+    ).query(`
+        SELECT TOP 1 NoProduksi, IsComplete, PCVerifiedAt
+        FROM dbo.WashingProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    if (!checkRes.recordset?.length) {
+      throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+    }
+
+    if (!checkRes.recordset[0].IsComplete) {
+      throw conflict(`Produksi ${no} belum complete, tidak bisa diverifikasi.`);
+    }
+
+    if (checkRes.recordset[0].PCVerifiedAt) {
+      throw conflict(`Produksi ${no} sudah diverifikasi operator.`);
+    }
+
+    await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), no)
+      .input("ActorId", sql.Int, Math.trunc(actorIdNum)).query(`
+        UPDATE dbo.WashingProduksi_h
+        SET PCVerifiedBy = @ActorId,
+            PCVerifiedAt = SYSUTCDATETIME()
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    await tx.commit();
+
+    return {
+      noProduksi: no,
+      verifiedOperator: true,
+      pcVerifiedBy: Math.trunc(actorIdNum),
+    };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
+  }
+}
+
+async function unverifyWashingProduksiPC(noProduksi, ctx) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const checkRes = await new sql.Request(tx).input(
+      "NoProduksi",
+      sql.VarChar(50),
+      no,
+    ).query(`
+        SELECT TOP 1 NoProduksi, PCVerifiedAt
+        FROM dbo.WashingProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    if (!checkRes.recordset?.length) {
+      throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+    }
+
+    if (!checkRes.recordset[0].PCVerifiedAt) {
+      throw conflict(`Produksi ${no} belum diverifikasi operator.`);
+    }
+
+    await new sql.Request(tx).input("NoProduksi", sql.VarChar(50), no).query(`
+        UPDATE dbo.WashingProduksi_h
+        SET PCVerifiedBy = NULL,
+            PCVerifiedAt = NULL
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    await tx.commit();
+
+    return {
+      noProduksi: no,
+      verifiedOperator: false,
+    };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
+  }
+}
+
+async function verifyWashingProduksiDeptHead(noProduksi, ctx) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const checkRes = await new sql.Request(tx).input(
+      "NoProduksi",
+      sql.VarChar(50),
+      no,
+    ).query(`
+        SELECT TOP 1 NoProduksi, IsComplete, SCVerifiedAt, PCVerifiedAt, DeptHeadVerifiedAt
+        FROM dbo.WashingProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    if (!checkRes.recordset?.length) {
+      throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+    }
+
+    const row = checkRes.recordset[0];
+
+    if (!row.IsComplete) {
+      throw conflict(`Produksi ${no} belum complete, tidak bisa diverifikasi.`);
+    }
+
+    if (!row.SCVerifiedAt) {
+      throw conflict(`Produksi ${no} belum diverifikasi kepala stock.`);
+    }
+
+    if (!row.PCVerifiedAt) {
+      throw conflict(`Produksi ${no} belum diverifikasi kepala operator.`);
+    }
+
+    if (row.DeptHeadVerifiedAt) {
+      throw conflict(`Produksi ${no} sudah diverifikasi kepala department.`);
+    }
+
+    await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), no)
+      .input("ActorId", sql.Int, Math.trunc(actorIdNum)).query(`
+        UPDATE dbo.WashingProduksi_h
+        SET DeptHeadVerifiedBy = @ActorId,
+            DeptHeadVerifiedAt = SYSUTCDATETIME()
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    await tx.commit();
+
+    return {
+      noProduksi: no,
+      verifiedDepartment: true,
+      deptHeadVerifiedBy: Math.trunc(actorIdNum),
+    };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
+  }
+}
+
+async function unverifyWashingProduksiDeptHead(noProduksi, ctx) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const checkRes = await new sql.Request(tx).input(
+      "NoProduksi",
+      sql.VarChar(50),
+      no,
+    ).query(`
+        SELECT TOP 1 NoProduksi, DeptHeadVerifiedAt
+        FROM dbo.WashingProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    if (!checkRes.recordset?.length) {
+      throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+    }
+
+    if (!checkRes.recordset[0].DeptHeadVerifiedAt) {
+      throw conflict(`Produksi ${no} belum diverifikasi kepala department.`);
+    }
+
+    await new sql.Request(tx).input("NoProduksi", sql.VarChar(50), no).query(`
+        UPDATE dbo.WashingProduksi_h
+        SET DeptHeadVerifiedBy = NULL,
+            DeptHeadVerifiedAt = NULL
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    await tx.commit();
+
+    return {
+      noProduksi: no,
+      verifiedDepartment: false,
     };
   } catch (error) {
     try {
@@ -1822,6 +2170,101 @@ async function getFormulaInputsByNoProduksi(noProduksi) {
       outputs: normalizedOutputs,
     })),
   };
+}
+
+async function getHeaderByNoProduksi(noProduksi) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const pool = await poolPromise;
+  const request = pool.request();
+  request.input("NoProduksi", sql.VarChar(50), no);
+
+  const result = await request.query(`
+    SELECT TOP 1
+      h.NoProduksi,
+      h.IdMesin,
+      ms.NamaMesin,
+      JSON_QUERY(
+        COALESCE(
+          (
+            SELECT
+              od.IdOperator,
+              opd.NamaOperator
+            FROM dbo.WashingProduksiOperator_d od WITH (NOLOCK)
+            INNER JOIN dbo.MstOperator opd WITH (NOLOCK) ON opd.IdOperator = od.IdOperator
+            WHERE od.NoProduksi = h.NoProduksi
+            ORDER BY od.IdOperator
+            FOR JSON PATH
+          ),
+          '[]'
+        )
+      ) AS Operators,
+      COALESCE(
+        (
+          SELECT STRING_AGG(opd.NamaOperator, ', ')
+          FROM dbo.WashingProduksiOperator_d od WITH (NOLOCK)
+          INNER JOIN dbo.MstOperator opd WITH (NOLOCK) ON opd.IdOperator = od.IdOperator
+          WHERE od.NoProduksi = h.NoProduksi
+        ),
+        ''
+      ) AS NamaOperators,
+      h.OutputJenisId,
+      jp.Jenis AS OutputJenisNama,
+      h.TglProduksi,
+      h.JamKerja,
+      h.Shift,
+      h.IsComplete,
+      h.SCVerifiedBy,
+      h.SCVerifiedAt,
+      h.PCVerifiedBy,
+      h.PCVerifiedAt,
+      h.DeptHeadVerifiedBy,
+      h.DeptHeadVerifiedAt,
+      h.JmlhAnggota,
+      h.Hadir,
+      h.HourMeter,
+      h.IsBlower,
+      CONVERT(VARCHAR(8), h.HourStart, 108) AS HourStart,
+      CONVERT(VARCHAR(8), h.HourEnd, 108) AS HourEnd,
+      h.IdRegu,
+      rg.NamaRegu
+    FROM dbo.WashingProduksi_h h WITH (NOLOCK)
+    LEFT JOIN dbo.MstMesin ms WITH (NOLOCK) ON ms.IdMesin = h.IdMesin
+    LEFT JOIN dbo.MstJenisPlastik jp WITH (NOLOCK) ON jp.IdJenisPlastik = h.OutputJenisId
+    LEFT JOIN dbo.MstRegu rg WITH (NOLOCK) ON rg.IdRegu = h.IdRegu
+    WHERE h.NoProduksi = @NoProduksi;
+  `);
+
+  const header = result.recordset?.[0];
+  if (!header) throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+
+  let operators = [];
+  if (Array.isArray(header.Operators)) {
+    operators = header.Operators;
+  } else if (typeof header.Operators === "string" && header.Operators.trim()) {
+    try {
+      operators = JSON.parse(header.Operators);
+    } catch (_) {
+      operators = [];
+    }
+  }
+
+  return { ...header, Operators: operators };
+}
+
+async function fetchVerificationSummary(noProduksi) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const [header, inputs, outputs, formulaInputs] = await Promise.all([
+    getHeaderByNoProduksi(no),
+    fetchInputsV2(no),
+    fetchOutputsV2(no),
+    getFormulaInputsByNoProduksi(no),
+  ]);
+
+  return { header, inputs, outputs, formulaInputs };
 }
 
 /**
@@ -2441,8 +2884,12 @@ module.exports = {
   getAllProduksi,
   createWashingProduksi,
   completeWashingProduksi,
-  verifyWashingProduksi,
-  unverifyWashingProduksi,
+  verifyWashingProduksiSC,
+  unverifyWashingProduksiSC,
+  verifyWashingProduksiPC,
+  unverifyWashingProduksiPC,
+  verifyWashingProduksiDeptHead,
+  unverifyWashingProduksiDeptHead,
   updateWashingProduksi,
   deleteWashingProduksi,
   fetchInputs,
@@ -2450,6 +2897,7 @@ module.exports = {
   fetchOutputs,
   fetchOutputsV2,
   getFormulaInputsByNoProduksi,
+  fetchVerificationSummary,
   validateLabel,
   upsertInputsAndPartials,
   deleteInputsAndPartials,

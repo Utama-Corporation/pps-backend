@@ -31,16 +31,46 @@ router.patch(
   washingProduksiController.completeProduksi,
 );
 
+// Verifikasi tingkat pertama (Stock Controller / SC).
 router.patch(
-  "/washing/:noProduksi/verify",
+  "/washing/:noProduksi/verify-sc",
   verifyToken,
-  washingProduksiController.verifyProduksi,
+  washingProduksiController.verifyProduksiSC,
 );
 
 router.patch(
-  "/washing/:noProduksi/unverify",
+  "/washing/:noProduksi/unverify-sc",
   verifyToken,
-  washingProduksiController.unverifyProduksi,
+  washingProduksiController.unverifyProduksiSC,
+);
+
+// Verifikasi tingkat kedua (Product Controller / PC), independen dari
+// verify-sc/unverify-sc di atas.
+router.patch(
+  "/washing/:noProduksi/verify-pc",
+  verifyToken,
+  washingProduksiController.verifyProduksiPC,
+);
+
+router.patch(
+  "/washing/:noProduksi/unverify-pc",
+  verifyToken,
+  washingProduksiController.unverifyProduksiPC,
+);
+
+// Verifikasi tingkat ketiga (Department Head): memvalidasi bahwa verifikasi
+// SC (verify-sc) dan PC (verify-pc) sudah dilakukan sebelum bisa
+// diverifikasi.
+router.patch(
+  "/washing/:noProduksi/verify-depthead",
+  verifyToken,
+  washingProduksiController.verifyProduksiDeptHead,
+);
+
+router.patch(
+  "/washing/:noProduksi/unverify-depthead",
+  verifyToken,
+  washingProduksiController.unverifyProduksiDeptHead,
 );
 
 // req.body support: { ..., isBlower: 1 | 0 }
@@ -92,6 +122,15 @@ router.get(
   "/washing/:noProduksi/formula-inputs",
   verifyToken,
   washingProduksiController.getFormulaInputsByNoProduksi,
+);
+
+// GET /api/production/washing/:noProduksi/verification-summary
+// Agregasi header + inputs/v2 + outputs/v2 + formula-inputs untuk layar
+// verifikasi Product Controller (lihat verify-pc/unverify-pc).
+router.get(
+  "/washing/:noProduksi/verification-summary",
+  verifyToken,
+  washingProduksiController.getVerificationSummary,
 );
 
 router.get(

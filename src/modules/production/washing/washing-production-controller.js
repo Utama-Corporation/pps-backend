@@ -71,6 +71,7 @@ async function getAllProduksi(req, res) {
 
   const complete = toBitUndef(req.query.complete) ?? null;
   const verified = toBitUndef(req.query.verified) ?? null;
+  const includeRendemen = toBitUndef(req.query.includeRendemen) === 1;
 
   try {
     const { data, total } = await washingProduksiService.getAllProduksi(
@@ -82,6 +83,7 @@ async function getAllProduksi(req, res) {
       shift,
       complete,
       verified,
+      includeRendemen,
     );
 
     return res.status(200).json({
@@ -101,6 +103,7 @@ async function getAllProduksi(req, res) {
         shift,
         complete,
         verified,
+        includeRendemen,
       },
     });
   } catch (error) {
@@ -528,7 +531,7 @@ async function completeProduksi(req, res) {
   }
 }
 
-async function verifyProduksi(req, res) {
+async function verifyProduksiSC(req, res) {
   const noProduksi = String(req.params.noProduksi || "").trim();
   if (!noProduksi) {
     return res
@@ -549,18 +552,15 @@ async function verifyProduksi(req, res) {
   const requestId = String(makeRequestId(req) || "").trim();
   if (requestId) res.setHeader("x-request-id", requestId);
 
-  const note = String(req.body?.note || "").trim() || null;
-
   try {
-    const data = await washingProduksiService.verifyWashingProduksi(
+    const data = await washingProduksiService.verifyWashingProduksiSC(
       noProduksi,
       { actorId, actorUsername, requestId },
-      note,
     );
 
     return res.status(200).json({ success: true, data });
   } catch (error) {
-    console.error("[washing.verifyProduksi]", error);
+    console.error("[washing.verifyProduksiSC]", error);
     const status = error.statusCode || error.status || 500;
     return res.status(status).json({
       success: false,
@@ -569,7 +569,7 @@ async function verifyProduksi(req, res) {
   }
 }
 
-async function unverifyProduksi(req, res) {
+async function unverifyProduksiSC(req, res) {
   const noProduksi = String(req.params.noProduksi || "").trim();
   if (!noProduksi) {
     return res
@@ -590,18 +590,168 @@ async function unverifyProduksi(req, res) {
   const requestId = String(makeRequestId(req) || "").trim();
   if (requestId) res.setHeader("x-request-id", requestId);
 
-  const note = String(req.body?.note || "").trim() || null;
-
   try {
-    const data = await washingProduksiService.unverifyWashingProduksi(
+    const data = await washingProduksiService.unverifyWashingProduksiSC(
       noProduksi,
       { actorId, actorUsername, requestId },
-      note,
     );
 
     return res.status(200).json({ success: true, data });
   } catch (error) {
-    console.error("[washing.unverifyProduksi]", error);
+    console.error("[washing.unverifyProduksiSC]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function verifyProduksiPC(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi wajib" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized (idUsername missing)",
+    });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data = await washingProduksiService.verifyWashingProduksiPC(
+      noProduksi,
+      { actorId, actorUsername, requestId },
+    );
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[washing.verifyProduksiPC]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function unverifyProduksiPC(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi wajib" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized (idUsername missing)",
+    });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data = await washingProduksiService.unverifyWashingProduksiPC(
+      noProduksi,
+      { actorId, actorUsername, requestId },
+    );
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[washing.unverifyProduksiPC]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function verifyProduksiDeptHead(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi wajib" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized (idUsername missing)",
+    });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data = await washingProduksiService.verifyWashingProduksiDeptHead(
+      noProduksi,
+      { actorId, actorUsername, requestId },
+    );
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[washing.verifyProduksiDeptHead]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function unverifyProduksiDeptHead(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi wajib" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized (idUsername missing)",
+    });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data =
+      await washingProduksiService.unverifyWashingProduksiDeptHead(
+        noProduksi,
+        { actorId, actorUsername, requestId },
+      );
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[washing.unverifyProduksiDeptHead]", error);
     const status = error.statusCode || error.status || 500;
     return res.status(status).json({
       success: false,
@@ -763,6 +913,31 @@ async function getFormulaInputsByNoProduksi(req, res) {
           ? error.message
           : "Internal Server Error",
       error: error.message,
+    });
+  }
+}
+
+async function getVerificationSummary(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+
+  try {
+    const data =
+      await washingProduksiService.fetchVerificationSummary(noProduksi);
+    return res
+      .status(200)
+      .json({ success: true, message: "Verification summary retrieved", data });
+  } catch (error) {
+    console.error("[washing.getVerificationSummary]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
     });
   }
 }
@@ -1148,8 +1323,13 @@ module.exports = {
   getAllProduksi,
   createProduksi,
   completeProduksi,
-  verifyProduksi,
-  unverifyProduksi,
+  verifyProduksiSC,
+  unverifyProduksiSC,
+  verifyProduksiPC,
+  unverifyProduksiPC,
+  verifyProduksiDeptHead,
+  unverifyProduksiDeptHead,
+  getVerificationSummary,
   updateProduksi,
   deleteProduksi,
   getInputsByNoProduksi,

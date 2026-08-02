@@ -30,16 +30,46 @@ router.patch(
   brokerProduksiController.completeProduksi,
 );
 
+// Verifikasi tingkat pertama (Stock Controller / SC).
 router.patch(
-  "/broker/:noProduksi/verify",
+  "/broker/:noProduksi/verify-sc",
   verifyToken,
-  brokerProduksiController.verifyProduksi,
+  brokerProduksiController.verifyProduksiSC,
 );
 
 router.patch(
-  "/broker/:noProduksi/unverify",
+  "/broker/:noProduksi/unverify-sc",
   verifyToken,
-  brokerProduksiController.unverifyProduksi,
+  brokerProduksiController.unverifyProduksiSC,
+);
+
+// Verifikasi tingkat kedua (Product Controller / PC), independen dari
+// verify-sc/unverify-sc di atas.
+router.patch(
+  "/broker/:noProduksi/verify-pc",
+  verifyToken,
+  brokerProduksiController.verifyProduksiPC,
+);
+
+router.patch(
+  "/broker/:noProduksi/unverify-pc",
+  verifyToken,
+  brokerProduksiController.unverifyProduksiPC,
+);
+
+// Verifikasi tingkat ketiga (Department Head): memvalidasi bahwa verifikasi
+// SC (verify-sc) dan PC (verify-pc) sudah dilakukan sebelum bisa
+// diverifikasi.
+router.patch(
+  "/broker/:noProduksi/verify-depthead",
+  verifyToken,
+  brokerProduksiController.verifyProduksiDeptHead,
+);
+
+router.patch(
+  "/broker/:noProduksi/unverify-depthead",
+  verifyToken,
+  brokerProduksiController.unverifyProduksiDeptHead,
 );
 
 // ✅ Update by NoProduksi
@@ -83,6 +113,15 @@ router.get(
   "/broker/:noProduksi/formula-inputs",
   verifyToken,
   brokerProduksiController.getFormulaInputsByNoProduksi,
+);
+
+// GET /api/production/broker/:noProduksi/verification-summary
+// Agregasi header + inputs/v2 + outputs/v2 + formula-inputs untuk layar
+// verifikasi Product Controller (lihat verify-pc/unverify-pc).
+router.get(
+  "/broker/:noProduksi/verification-summary",
+  verifyToken,
+  brokerProduksiController.getVerificationSummary,
 );
 
 router.get(

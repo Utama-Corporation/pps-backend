@@ -59,6 +59,7 @@ async function getAllProduksi(req, res) {
 
   const complete = toBitUndef(req.query.complete) ?? null;
   const verified = toBitUndef(req.query.verified) ?? null;
+  const includeRendemen = toBitUndef(req.query.includeRendemen) === 1;
 
   try {
     const { data, total } = await brokerProduksiService.getAllProduksi(
@@ -70,6 +71,7 @@ async function getAllProduksi(req, res) {
       shift,
       complete,
       verified,
+      includeRendemen,
     );
 
     return res.status(200).json({
@@ -89,6 +91,7 @@ async function getAllProduksi(req, res) {
         shift,
         complete,
         verified,
+        includeRendemen,
       },
     });
   } catch (error) {
@@ -206,6 +209,31 @@ async function getFormulaInputsByNoProduksi(req, res) {
         error.statusCode && error.statusCode !== 500
           ? undefined
           : error.message,
+    });
+  }
+}
+
+async function getVerificationSummary(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+
+  try {
+    const data =
+      await brokerProduksiService.fetchVerificationSummary(noProduksi);
+    return res
+      .status(200)
+      .json({ success: true, message: "Verification summary retrieved", data });
+  } catch (error) {
+    console.error("[broker.getVerificationSummary]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
     });
   }
 }
@@ -1098,7 +1126,7 @@ async function completeProduksi(req, res) {
   }
 }
 
-async function verifyProduksi(req, res) {
+async function verifyProduksiSC(req, res) {
   const noProduksi = String(req.params.noProduksi || "").trim();
   if (!noProduksi) {
     return res
@@ -1119,18 +1147,15 @@ async function verifyProduksi(req, res) {
   const requestId = String(makeRequestId(req) || "").trim();
   if (requestId) res.setHeader("x-request-id", requestId);
 
-  const note = String(req.body?.note || "").trim() || null;
-
   try {
-    const data = await brokerProduksiService.verifyBrokerProduksi(
+    const data = await brokerProduksiService.verifyBrokerProduksiSC(
       noProduksi,
       { actorId, actorUsername, requestId },
-      note,
     );
 
     return res.status(200).json({ success: true, data });
   } catch (error) {
-    console.error("[broker.verifyProduksi]", error);
+    console.error("[broker.verifyProduksiSC]", error);
     const status = error.statusCode || error.status || 500;
     return res.status(status).json({
       success: false,
@@ -1139,7 +1164,7 @@ async function verifyProduksi(req, res) {
   }
 }
 
-async function unverifyProduksi(req, res) {
+async function unverifyProduksiSC(req, res) {
   const noProduksi = String(req.params.noProduksi || "").trim();
   if (!noProduksi) {
     return res
@@ -1160,18 +1185,167 @@ async function unverifyProduksi(req, res) {
   const requestId = String(makeRequestId(req) || "").trim();
   if (requestId) res.setHeader("x-request-id", requestId);
 
-  const note = String(req.body?.note || "").trim() || null;
-
   try {
-    const data = await brokerProduksiService.unverifyBrokerProduksi(
+    const data = await brokerProduksiService.unverifyBrokerProduksiSC(
       noProduksi,
       { actorId, actorUsername, requestId },
-      note,
     );
 
     return res.status(200).json({ success: true, data });
   } catch (error) {
-    console.error("[broker.unverifyProduksi]", error);
+    console.error("[broker.unverifyProduksiSC]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function verifyProduksiPC(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi wajib" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized (idUsername missing)",
+    });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data = await brokerProduksiService.verifyBrokerProduksiPC(
+      noProduksi,
+      { actorId, actorUsername, requestId },
+    );
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[broker.verifyProduksiPC]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function unverifyProduksiPC(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi wajib" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized (idUsername missing)",
+    });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data = await brokerProduksiService.unverifyBrokerProduksiPC(
+      noProduksi,
+      { actorId, actorUsername, requestId },
+    );
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[broker.unverifyProduksiPC]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function verifyProduksiDeptHead(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi wajib" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized (idUsername missing)",
+    });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data = await brokerProduksiService.verifyBrokerProduksiDeptHead(
+      noProduksi,
+      { actorId, actorUsername, requestId },
+    );
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[broker.verifyProduksiDeptHead]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function unverifyProduksiDeptHead(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi wajib" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized (idUsername missing)",
+    });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data = await brokerProduksiService.unverifyBrokerProduksiDeptHead(
+      noProduksi,
+      { actorId, actorUsername, requestId },
+    );
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[broker.unverifyProduksiDeptHead]", error);
     const status = error.statusCode || error.status || 500;
     return res.status(status).json({
       success: false,
@@ -1268,6 +1442,7 @@ module.exports = {
   getInputsByNoProduksi,
   getInputsByNoProduksiV2,
   getFormulaInputsByNoProduksi,
+  getVerificationSummary,
   getOutputsByNoProduksi,
   getOutputsByNoProduksiV2,
   getOutputsBonggolanByNoProduksi,
@@ -1276,8 +1451,12 @@ module.exports = {
   updateProduksi,
   deleteProduksi,
   completeProduksi,
-  verifyProduksi,
-  unverifyProduksi,
+  verifyProduksiSC,
+  unverifyProduksiSC,
+  verifyProduksiPC,
+  unverifyProduksiPC,
+  verifyProduksiDeptHead,
+  unverifyProduksiDeptHead,
   validateLabel,
   upsertInputsAndPartials,
   deleteInputsAndPartials,

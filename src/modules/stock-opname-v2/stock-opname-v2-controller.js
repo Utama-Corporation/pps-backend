@@ -438,7 +438,14 @@ async function insertHasilHandler(req, res) {
       labelNo,
       blok,
       locationId,
-      ctx: { actorId, actorUsername, requestId },
+      ctx: {
+        actorId,
+        actorUsername,
+        requestId,
+        bypassLokasiCheck:
+          req.userPermissions?.has("*") ||
+          req.userPermissions?.has("stockopname:create"),
+      },
     });
 
     const io = getIo();
@@ -456,6 +463,45 @@ async function insertHasilHandler(req, res) {
     });
   } catch (error) {
     console.error("Error inserting stock-opname hasil:", error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+      code: error.code,
+    });
+  }
+}
+
+async function deleteHasilHandler(req, res) {
+  const actorUsername = getActorUsername(req) || "system";
+  const { stockOpnameNo, labelNo } = req.params;
+
+  console.log(
+    "Delete stock-opname hasil | Username:", actorUsername,
+    "| stockOpnameNo:", stockOpnameNo,
+    "| labelNo:", labelNo,
+  );
+
+  try {
+    const result = await stockOpnameV2Service.deleteStockOpnameHasil({
+      stockOpnameNo,
+      labelNo,
+    });
+
+    const io = getIo();
+    if (io) {
+      io.to(`stock-opname:${result.stockOpnameNo}`).emit(
+        "stock_opname_hasil_deleted",
+        { ...result, deletedByUsername: actorUsername },
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Label ${result.labelNo} berhasil dihapus dari hasil, silakan scan ulang dengan lokasi yang benar`,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error deleting stock-opname hasil:", error);
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Internal Server Error",
@@ -710,6 +756,7 @@ async function listLokasiByUserHandler(req, res) {
 }
 
 async function assignAccessHandler(req, res) {
+  const actorUsername = getActorUsername(req) || "system";
   const { blok, idLokasi, idUsername, stockOpnameNo } = req.body || {};
 
   try {
@@ -719,6 +766,15 @@ async function assignAccessHandler(req, res) {
       idUsername: Number(idUsername),
       stockOpnameNo,
     });
+
+    const io = getIo();
+    if (io) {
+      io.to(`stock-opname:${result.stockOpnameNo}`).emit(
+        "stock_opname_lokasi_assigned",
+        { ...result, assignedByUsername: actorUsername },
+      );
+    }
+
     return res.status(201).json({
       success: true,
       message: `User ${idUsername} berhasil ditugaskan ke lokasi ${blok}/${idLokasi} untuk ${stockOpnameNo}`,
@@ -771,6 +827,7 @@ module.exports = {
   getJenisInNosoHandler,
   getSnapshotHandler,
   insertHasilHandler,
+  deleteHasilHandler,
   getScanUserSummaryHandler,
   listBlokHandler,
   getLocationsHandler,

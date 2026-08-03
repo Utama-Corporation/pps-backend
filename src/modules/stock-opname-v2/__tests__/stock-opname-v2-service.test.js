@@ -295,3 +295,128 @@ describe("revokeAccessByStockOpname", () => {
     expect(mQuery).not.toHaveBeenCalled();
   });
 });
+
+describe("insertStockOpnameHasil", () => {
+  const header = { NoSO: "SO.01", IdKategori: 1, IsComplete: false };
+  const category = { KodeKategori: "washing" };
+  const referenceRow = { NoWashing: "B.2601.0001", JmlhSak: 2, Berat: 10, Blok: "A", IdLokasi: 1 };
+
+  it("throws a 403 error when the scanning user isn't assigned to the scanned lokasi", async () => {
+    mQuery
+      .mockResolvedValueOnce({ recordset: [header] })
+      .mockResolvedValueOnce({ recordset: [category] })
+      .mockResolvedValueOnce({ recordset: [referenceRow] })
+      .mockResolvedValueOnce({ recordset: [] }) // dupRes: belum pernah discan
+      .mockResolvedValueOnce({ recordset: [] }); // isUserAllowedForLokasi: tidak ditugaskan
+
+    await expect(
+      service.insertStockOpnameHasil({
+        stockOpnameNo: "SO.01",
+        labelNo: "B.2601.0001",
+        blok: "A",
+        locationId: 1,
+        ctx: { actorId: 99, actorUsername: "budi", requestId: "req-1" },
+      }),
+    ).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it("skips the lokasi-access check when bypassLokasiCheck is true (admin)", async () => {
+    mQuery
+      .mockResolvedValueOnce({ recordset: [header] })
+      .mockResolvedValueOnce({ recordset: [category] })
+      .mockResolvedValueOnce({ recordset: [referenceRow] })
+      .mockResolvedValueOnce({ recordset: [] }) // dupRes
+      .mockResolvedValueOnce({}); // INSERT
+
+    const result = await service.insertStockOpnameHasil({
+      stockOpnameNo: "SO.01",
+      labelNo: "B.2601.0001",
+      blok: "A",
+      locationId: 1,
+      ctx: { actorId: 99, actorUsername: "admin", requestId: "req-2", bypassLokasiCheck: true },
+    });
+
+    expect(result.labelNo).toBe("B.2601.0001");
+    expect(mQuery).toHaveBeenCalledTimes(5);
+  });
+
+  it("includes who and where the label was already scanned in the duplicate error message, formatted from the UTC fields mssql maps SQL Server's local DATETIME into", async () => {
+    mQuery
+      .mockResolvedValueOnce({ recordset: [header] })
+      .mockResolvedValueOnce({ recordset: [category] })
+      .mockResolvedValueOnce({ recordset: [referenceRow] })
+      .mockResolvedValueOnce({
+        recordset: [
+          {
+            Username: "siti",
+            ScannedBlok: "A",
+            ScannedIdLokasi: 1,
+            // mssql (useUTC default true) maps SQL Server's naive local DATETIME
+            // straight into the Date's UTC fields, not local ones.
+            DateTimeScan: new Date(Date.UTC(2026, 0, 5, 10, 47, 9)),
+          },
+        ],
+      });
+
+    await expect(
+      service.insertStockOpnameHasil({
+        stockOpnameNo: "SO.01",
+        labelNo: "B.2601.0001",
+        ctx: { actorId: 99, actorUsername: "budi", requestId: "req-3" },
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringContaining("siti di A/1 pada 05/01/2026 10:47:09"),
+    });
+  });
+});
+
+describe("deleteStockOpnameHasil", () => {
+  const header = { NoSO: "SO.01", IdKategori: 1, IsComplete: false };
+  const category = { KodeKategori: "washing" };
+
+  it("deletes the hasil row for the given label", async () => {
+    mQuery
+      .mockResolvedValueOnce({ recordset: [header] })
+      .mockResolvedValueOnce({ recordset: [category] })
+      .mockResolvedValueOnce({ rowsAffected: [1] });
+
+    const result = await service.deleteStockOpnameHasil({
+      stockOpnameNo: "SO.01",
+      labelNo: "B.2601.0001",
+    });
+
+    expect(result).toEqual({
+      stockOpnameNo: "SO.01",
+      categoryCode: "washing",
+      labelNo: "B.2601.0001",
+    });
+  });
+
+  it("throws a 404 error when the label was never scanned", async () => {
+    mQuery
+      .mockResolvedValueOnce({ recordset: [header] })
+      .mockResolvedValueOnce({ recordset: [category] })
+      .mockResolvedValueOnce({ rowsAffected: [0] });
+
+    await expect(
+      service.deleteStockOpnameHasil({
+        stockOpnameNo: "SO.01",
+        labelNo: "B.2601.0001",
+      }),
+    ).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("throws a 409 error when the stock opname is already complete", async () => {
+    mQuery
+      .mockResolvedValueOnce({ recordset: [{ ...header, IsComplete: true }] })
+      .mockResolvedValueOnce({ recordset: [category] });
+
+    await expect(
+      service.deleteStockOpnameHasil({
+        stockOpnameNo: "SO.01",
+        labelNo: "B.2601.0001",
+      }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+});

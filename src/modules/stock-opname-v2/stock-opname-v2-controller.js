@@ -4,6 +4,7 @@ const {
   getActorUsername,
   makeRequestId,
 } = require("../../core/utils/http-context");
+const { getIo } = require("../../core/utils/socket-instance");
 
 async function listKategoriHandler(req, res) {
   const { username } = req;
@@ -421,7 +422,7 @@ async function insertHasilHandler(req, res) {
   if (requestId) res.setHeader("x-request-id", requestId);
 
   const { stockOpnameNo } = req.params;
-  const { labelNo, palletNo, blok, locationId } = req.body || {};
+  const { labelNo, blok, locationId } = req.body || {};
 
   console.log(
     "Insert stock-opname hasil | Username:", req.username,
@@ -435,11 +436,18 @@ async function insertHasilHandler(req, res) {
     const result = await stockOpnameV2Service.insertStockOpnameHasil({
       stockOpnameNo,
       labelNo,
-      palletNo,
       blok,
       locationId,
       ctx: { actorId, actorUsername, requestId },
     });
+
+    const io = getIo();
+    if (io) {
+      io.to(`stock-opname:${result.stockOpnameNo}`).emit(
+        "stock_opname_hasil_inserted",
+        { ...result, scannedByUsername: actorUsername },
+      );
+    }
 
     return res.status(201).json({
       success: true,

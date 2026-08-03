@@ -1493,7 +1493,6 @@ async function listMyLokasiWithLabelCount(idUsername) {
 async function insertStockOpnameHasil({
   stockOpnameNo,
   labelNo,
-  palletNo,
   blok,
   locationId,
   ctx,
@@ -1510,15 +1509,29 @@ async function insertStockOpnameHasil({
     );
   }
 
-  const label = String(labelNo || "").trim();
-  if (!label) throw badReq("labelNo wajib diisi");
+  const rawLabel = String(labelNo || "").trim();
+  if (!rawLabel) throw badReq("labelNo wajib diisi");
 
+  // Kategori bahanbaku/bahanbakupakai discan sebagai satu barcode gabungan
+  // "NoBahanBaku-NoPallet" (mis. A.2508.0001-3) — konvensi sama dgn
+  // label-detail-service.js & stock-opname-service.js (legacy). NoBahanBaku
+  // sendiri hanya pakai titik sebagai separator, jadi split by "-" aman.
   const needsPalletNo = cfg.labelColumns.includes("NoPallet");
+  let label = rawLabel;
   let palletNoNum = null;
   if (needsPalletNo) {
-    palletNoNum = Number(palletNo);
-    if (!Number.isInteger(palletNoNum)) {
-      throw badReq("palletNo wajib diisi (integer) untuk kategori ini");
+    const dashIdx = rawLabel.lastIndexOf("-");
+    if (dashIdx === -1) {
+      throw badReq(
+        "Format labelNo salah, wajib NoBahanBaku-NoPallet untuk kategori ini",
+      );
+    }
+    label = rawLabel.slice(0, dashIdx);
+    palletNoNum = Number(rawLabel.slice(dashIdx + 1));
+    if (!label || !Number.isInteger(palletNoNum)) {
+      throw badReq(
+        "Format labelNo salah, wajib NoBahanBaku-NoPallet (pallet harus angka)",
+      );
     }
   }
 

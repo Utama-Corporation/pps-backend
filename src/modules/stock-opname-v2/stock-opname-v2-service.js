@@ -10,7 +10,7 @@ const {
   toDateOnly,
   formatYMD,
 } = require("../../core/shared/tutup-transaksi-guard");
-const { badReq, notFound, conflict } = require("../../core/utils/http-error");
+const { badReq, notFound, conflict, forbidden } = require("../../core/utils/http-error");
 const {
   STOCK_OPNAME_SNAPSHOT_CONFIG,
 } = require("../../core/config/stock-opname-snapshot.config");
@@ -280,6 +280,8 @@ async function getAllKategoriWithStatus({ year, month } = {}) {
           scannedCount: 0,
           startDate: null,
           completedAt: null,
+          workingLocationCount: 0,
+          workingLocations: [],
         };
       }
 
@@ -310,6 +312,39 @@ async function getAllKategoriWithStatus({ year, month } = {}) {
         scannedCount = countRes.recordset?.[0]?.scannedCount || 0;
       }
 
+      // Lokasi yang sedang dikerjakan (masih ada penugasan aktif) untuk sesi
+      // stock opname ini — baris di MstUserLokasiAccess selalu berarti
+      // "masih berjalan" (lihat catatan di listLokasiByUser).
+      const workingRes = await pool
+        .request()
+        .input("stockOpnameNo", sql.VarChar, row.NoSO).query(`
+          SELECT a.Blok, a.IdLokasi, l.Description AS description,
+            a.IdUsername, u.Username, u.FName, u.LName
+          FROM [dbo].[MstUserLokasiAccess] a
+          LEFT JOIN [dbo].[MstUsername] u ON u.IdUsername = a.IdUsername
+          LEFT JOIN [dbo].[MstLokasi] l ON l.Blok = a.Blok AND l.IdLokasi = a.IdLokasi
+          WHERE a.NoSO = @stockOpnameNo
+          ORDER BY a.Blok ASC, a.IdLokasi ASC, u.Username ASC;
+        `);
+
+      const workingLocationsMap = new Map();
+      for (const wr of workingRes.recordset || []) {
+        const key = `${wr.Blok}${wr.IdLokasi}`;
+        if (!workingLocationsMap.has(key)) {
+          workingLocationsMap.set(key, {
+            lokasi: key,
+            description: wr.description ?? null,
+            users: [],
+          });
+        }
+        workingLocationsMap.get(key).users.push({
+          idUsername: wr.IdUsername,
+          username: wr.Username,
+          fullName: [wr.FName, wr.LName].filter(Boolean).join(" ") || null,
+        });
+      }
+      const workingLocations = Array.from(workingLocationsMap.values());
+
       return {
         ...base,
         stockOpnameNo: row.NoSO,
@@ -320,6 +355,8 @@ async function getAllKategoriWithStatus({ year, month } = {}) {
         scannedCount,
         startDate: row.Tanggal ?? null,
         completedAt: row.DateComplete ?? null,
+        workingLocationCount: workingLocations.length,
+        workingLocations,
       };
     }),
   );
@@ -1077,15 +1114,60 @@ async function getAllBlok({ stockOpnameNo }) {
       GROUP BY src.Blok;
     `);
 
+  // Lokasi yang sedang dikerjakan (masih ada penugasan aktif) per blok —
+  // baris di MstUserLokasiAccess untuk NoSO ini selalu berarti "masih berjalan"
+  // (lihat catatan di listLokasiByUser).
+  const workingRes = await pool
+    .request()
+    .input("stockOpnameNo", sql.VarChar, no)
+    .query(`
+      SELECT a.Blok, a.IdLokasi, l.Description AS description,
+        a.IdUsername, u.Username, u.FName, u.LName
+      FROM [dbo].[MstUserLokasiAccess] a
+      LEFT JOIN [dbo].[MstUsername] u ON u.IdUsername = a.IdUsername
+      LEFT JOIN [dbo].[MstLokasi] l ON l.Blok = a.Blok AND l.IdLokasi = a.IdLokasi
+      WHERE a.NoSO = @stockOpnameNo
+      ORDER BY a.Blok ASC, a.IdLokasi ASC, u.Username ASC;
+    `);
+
+  const workingLocationsByBlok = new Map();
+  for (const row of workingRes.recordset || []) {
+    const blokKey = row.Blok ?? UNKNOWN_BLOK_CODE;
+    if (!workingLocationsByBlok.has(blokKey)) {
+      workingLocationsByBlok.set(blokKey, new Map());
+    }
+    const locMap = workingLocationsByBlok.get(blokKey);
+    if (!locMap.has(row.IdLokasi)) {
+      locMap.set(row.IdLokasi, {
+        lokasi: `${row.Blok}${row.IdLokasi}`,
+        description: row.description ?? null,
+        users: [],
+      });
+    }
+    locMap.get(row.IdLokasi).users.push({
+      idUsername: row.IdUsername,
+      username: row.Username,
+      fullName: [row.FName, row.LName].filter(Boolean).join(" ") || null,
+    });
+  }
+
   // Blok tidak diketahui: seluruh label tanpa Blok tercatat digabung jadi
   // satu bucket "Lokasi Tidak Diketahui" (IdLokasi tidak relevan tanpa Blok).
-  const bloks = (res.recordset || []).map((r) => ({
-    blok: r.blok ?? UNKNOWN_BLOK_CODE,
-    locationCount: r.blok === null ? 1 : r.locationCount,
-    labelCount: r.labelCount,
-    scannedCount: r.scannedCount,
-    ...(showWeight ? { totalWeight: r.totalWeight } : { totalPcs: r.totalPcs }),
-  }));
+  const bloks = (res.recordset || []).map((r) => {
+    const blokKey = r.blok ?? UNKNOWN_BLOK_CODE;
+    const workingLocations = Array.from(
+      workingLocationsByBlok.get(blokKey)?.values() || [],
+    );
+    return {
+      blok: blokKey,
+      locationCount: r.blok === null ? 1 : r.locationCount,
+      labelCount: r.labelCount,
+      scannedCount: r.scannedCount,
+      ...(showWeight ? { totalWeight: r.totalWeight } : { totalPcs: r.totalPcs }),
+      workingLocationCount: workingLocations.length,
+      workingLocations,
+    };
+  });
 
   bloks.sort((a, b) => {
     if (a.blok === UNKNOWN_BLOK_CODE) return 1;
@@ -1242,6 +1324,21 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
 // normalizer yang sama dipakai modul stock-opname v1.
 function normBlokValue(value) {
   return (value ?? "").toString().trim().toUpperCase() || null;
+}
+
+// mssql (tedious, useUTC default true) memetakan nilai DATETIME dari SQL
+// Server (jam lokal server, mis. GETDATE()) ke FIELD UTC objek Date, bukan
+// field lokal — jadi toString()/getter lokal akan salah geser sebesar offset
+// timezone proses Node. Pakai getter UTC agar dapat wall-clock yang sama
+// persis dengan yang tersimpan di DB (pola sama seperti
+// broker-production-service.js normalizeTimeValue).
+function formatSqlDateTime(value) {
+  if (!(value instanceof Date)) return String(value ?? "");
+  const pad = (n) => String(n).padStart(2, "0");
+  return (
+    `${pad(value.getUTCDate())}/${pad(value.getUTCMonth() + 1)}/${value.getUTCFullYear()} ` +
+    `${pad(value.getUTCHours())}:${pad(value.getUTCMinutes())}:${pad(value.getUTCSeconds())}`
+  );
 }
 
 // Dipakai app scan (field worker): daftar lokasi (lintas blok) pada satu NoSO
@@ -1411,7 +1508,6 @@ async function listMyLokasiWithLabelCount(idUsername) {
 async function insertStockOpnameHasil({
   stockOpnameNo,
   labelNo,
-  palletNo,
   blok,
   locationId,
   ctx,
@@ -1428,15 +1524,29 @@ async function insertStockOpnameHasil({
     );
   }
 
-  const label = String(labelNo || "").trim();
-  if (!label) throw badReq("labelNo wajib diisi");
+  const rawLabel = String(labelNo || "").trim();
+  if (!rawLabel) throw badReq("labelNo wajib diisi");
 
+  // Kategori bahanbaku/bahanbakupakai discan sebagai satu barcode gabungan
+  // "NoBahanBaku-NoPallet" (mis. A.2508.0001-3) — konvensi sama dgn
+  // label-detail-service.js & stock-opname-service.js (legacy). NoBahanBaku
+  // sendiri hanya pakai titik sebagai separator, jadi split by "-" aman.
   const needsPalletNo = cfg.labelColumns.includes("NoPallet");
+  let label = rawLabel;
   let palletNoNum = null;
   if (needsPalletNo) {
-    palletNoNum = Number(palletNo);
-    if (!Number.isInteger(palletNoNum)) {
-      throw badReq("palletNo wajib diisi (integer) untuk kategori ini");
+    const dashIdx = rawLabel.lastIndexOf("-");
+    if (dashIdx === -1) {
+      throw badReq(
+        "Format labelNo salah, wajib NoBahanBaku-NoPallet untuk kategori ini",
+      );
+    }
+    label = rawLabel.slice(0, dashIdx);
+    palletNoNum = Number(rawLabel.slice(dashIdx + 1));
+    if (!label || !Number.isInteger(palletNoNum)) {
+      throw badReq(
+        "Format labelNo salah, wajib NoBahanBaku-NoPallet (pallet harus angka)",
+      );
     }
   }
 
@@ -1496,10 +1606,14 @@ async function insertStockOpnameHasil({
   }
 
   const dupRes = await bindLabel(pool.request()).query(`
-    SELECT 1 FROM dbo.${cfg.hasilTable} WHERE NoSO = @stockOpnameNo AND ${labelWhereSql};
+    SELECT Username, ScannedBlok, ScannedIdLokasi, DateTimeScan
+    FROM dbo.${cfg.hasilTable} WHERE NoSO = @stockOpnameNo AND ${labelWhereSql};
   `);
-  if (dupRes.recordset?.length) {
-    throw conflict(`Label ${labelDisplay} sudah discan sebelumnya`);
+  const dupRow = dupRes.recordset?.[0];
+  if (dupRow) {
+    throw conflict(
+      `Label ${labelDisplay} sudah discan sebelumnya oleh ${dupRow.Username} di ${dupRow.ScannedBlok}/${dupRow.ScannedIdLokasi} pada ${formatSqlDateTime(dupRow.DateTimeScan)}`,
+    );
   }
 
   // Default ke lokasi acuan kalau operator tidak mengirim lokasi hasil scan.
@@ -1510,6 +1624,23 @@ async function insertStockOpnameHasil({
   const isLocationMismatch =
     normBlokValue(scannedBlok) !== normBlokValue(referenceRow.Blok) ||
     (scannedLocationId ?? null) !== (referenceRow.IdLokasi ?? null);
+
+  // User harus ditugaskan (MstUserLokasiAccess) ke Blok/Lokasi yang dia scan,
+  // kecuali admin (bypassLokasiCheck dari permission "*"/"stockopname:create")
+  // atau lokasi hasil scan tidak diketahui (tidak ada Blok/Lokasi konkret utk dicek).
+  if (!ctx?.bypassLokasiCheck && scannedBlok != null && scannedLocationId != null) {
+    const allowed = await isUserAllowedForLokasi({
+      blok: scannedBlok,
+      idLokasi: scannedLocationId,
+      idUsername: ctx?.actorId,
+      stockOpnameNo: no,
+    });
+    if (!allowed) {
+      throw forbidden(
+        `Anda tidak memiliki akses ke lokasi ${scannedBlok}/${scannedLocationId} untuk ${no}`,
+      );
+    }
+  }
 
   const insertReq = bindLabel(pool.request());
   insertReq.input("weight", sql.Float, referenceRow.Berat ?? 0);
@@ -1554,6 +1685,67 @@ async function insertStockOpnameHasil({
     scannedLocationId: scannedLocationId ?? UNKNOWN_LOCATION_ID,
     isLocationMismatch,
   };
+}
+
+// Koreksi scan salah lokasi: hapus baris hasil yang salah, supaya labelnya
+// bisa discan ulang (lewat insertStockOpnameHasil biasa) dengan lokasi yang
+// benar — otomatis kena validasi lokasi-access. DateTimeScan/Username asli
+// dari scan yang salah tidak dipertahankan (tergantikan oleh scan ulang).
+async function deleteStockOpnameHasil({ stockOpnameNo, labelNo }) {
+  const pool = await poolPromise;
+  const { no, header, categoryCode, cfg } = await resolveStockOpnameCategory(
+    pool,
+    stockOpnameNo,
+  );
+
+  if (header.IsComplete) {
+    throw conflict(
+      `Stock opname ${no} sudah ditandai selesai, tidak bisa menghapus hasil.`,
+    );
+  }
+
+  const rawLabel = String(labelNo || "").trim();
+  if (!rawLabel) throw badReq("labelNo wajib diisi");
+
+  const needsPalletNo = cfg.labelColumns.includes("NoPallet");
+  let label = rawLabel;
+  let palletNoNum = null;
+  if (needsPalletNo) {
+    const dashIdx = rawLabel.lastIndexOf("-");
+    if (dashIdx === -1) {
+      throw badReq(
+        "Format labelNo salah, wajib NoBahanBaku-NoPallet untuk kategori ini",
+      );
+    }
+    label = rawLabel.slice(0, dashIdx);
+    palletNoNum = Number(rawLabel.slice(dashIdx + 1));
+    if (!label || !Number.isInteger(palletNoNum)) {
+      throw badReq(
+        "Format labelNo salah, wajib NoBahanBaku-NoPallet (pallet harus angka)",
+      );
+    }
+  }
+
+  const labelDisplay = needsPalletNo ? `${label}-${palletNoNum}` : label;
+  const labelWhereSql = needsPalletNo
+    ? `${cfg.labelColumns[0]} = @label AND NoPallet = @palletNo`
+    : `${cfg.labelColumns[0]} = @label`;
+
+  const deleteReq = pool.request();
+  deleteReq.input("stockOpnameNo", sql.VarChar, no);
+  deleteReq.input("label", sql.VarChar, label);
+  if (needsPalletNo) deleteReq.input("palletNo", sql.Int, palletNoNum);
+
+  const result = await deleteReq.query(`
+    DELETE FROM dbo.${cfg.hasilTable} WHERE NoSO = @stockOpnameNo AND ${labelWhereSql};
+  `);
+  if (!result.rowsAffected?.[0]) {
+    throw notFound(
+      `Label ${labelDisplay} belum pernah discan di stock opname ${no}`,
+    );
+  }
+
+  return { stockOpnameNo: no, categoryCode, labelNo: labelDisplay };
 }
 
 // Dipakai FE utk lihat siapa saja yang sudah scan pada NoSO ini dan berapa
@@ -1721,6 +1913,7 @@ module.exports = {
   getTypesInStockOpname,
   getStockOpnameSnapshot,
   insertStockOpnameHasil,
+  deleteStockOpnameHasil,
   getScanUserSummary,
   deleteStockOpname,
   getAllBlok,

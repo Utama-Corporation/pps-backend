@@ -4,6 +4,7 @@ const {
   getActorUsername,
   makeRequestId,
 } = require("../../core/utils/http-context");
+const { getIo } = require("../../core/utils/socket-instance");
 
 async function listKategoriHandler(req, res) {
   const { username } = req;
@@ -421,7 +422,7 @@ async function insertHasilHandler(req, res) {
   if (requestId) res.setHeader("x-request-id", requestId);
 
   const { stockOpnameNo } = req.params;
-  const { labelNo, palletNo, blok, locationId } = req.body || {};
+  const { labelNo, blok, locationId } = req.body || {};
 
   console.log(
     "Insert stock-opname hasil | Username:", req.username,
@@ -435,11 +436,25 @@ async function insertHasilHandler(req, res) {
     const result = await stockOpnameV2Service.insertStockOpnameHasil({
       stockOpnameNo,
       labelNo,
-      palletNo,
       blok,
       locationId,
-      ctx: { actorId, actorUsername, requestId },
+      ctx: {
+        actorId,
+        actorUsername,
+        requestId,
+        bypassLokasiCheck:
+          req.userPermissions?.has("*") ||
+          req.userPermissions?.has("stockopname:create"),
+      },
     });
+
+    const io = getIo();
+    if (io) {
+      io.to(`stock-opname:${result.stockOpnameNo}`).emit(
+        "stock_opname_hasil_inserted",
+        { ...result, scannedByUsername: actorUsername },
+      );
+    }
 
     return res.status(201).json({
       success: true,
@@ -448,6 +463,45 @@ async function insertHasilHandler(req, res) {
     });
   } catch (error) {
     console.error("Error inserting stock-opname hasil:", error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+      code: error.code,
+    });
+  }
+}
+
+async function deleteHasilHandler(req, res) {
+  const actorUsername = getActorUsername(req) || "system";
+  const { stockOpnameNo, labelNo } = req.params;
+
+  console.log(
+    "Delete stock-opname hasil | Username:", actorUsername,
+    "| stockOpnameNo:", stockOpnameNo,
+    "| labelNo:", labelNo,
+  );
+
+  try {
+    const result = await stockOpnameV2Service.deleteStockOpnameHasil({
+      stockOpnameNo,
+      labelNo,
+    });
+
+    const io = getIo();
+    if (io) {
+      io.to(`stock-opname:${result.stockOpnameNo}`).emit(
+        "stock_opname_hasil_deleted",
+        { ...result, deletedByUsername: actorUsername },
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Label ${result.labelNo} berhasil dihapus dari hasil, silakan scan ulang dengan lokasi yang benar`,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error deleting stock-opname hasil:", error);
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Internal Server Error",
@@ -702,6 +756,7 @@ async function listLokasiByUserHandler(req, res) {
 }
 
 async function assignAccessHandler(req, res) {
+  const actorUsername = getActorUsername(req) || "system";
   const { blok, idLokasi, idUsername, stockOpnameNo } = req.body || {};
 
   try {
@@ -711,6 +766,15 @@ async function assignAccessHandler(req, res) {
       idUsername: Number(idUsername),
       stockOpnameNo,
     });
+
+    const io = getIo();
+    if (io) {
+      io.to(`stock-opname:${result.stockOpnameNo}`).emit(
+        "stock_opname_lokasi_assigned",
+        { ...result, assignedByUsername: actorUsername },
+      );
+    }
+
     return res.status(201).json({
       success: true,
       message: `User ${idUsername} berhasil ditugaskan ke lokasi ${blok}/${idLokasi} untuk ${stockOpnameNo}`,
@@ -763,6 +827,7 @@ module.exports = {
   getJenisInNosoHandler,
   getSnapshotHandler,
   insertHasilHandler,
+  deleteHasilHandler,
   getScanUserSummaryHandler,
   listBlokHandler,
   getLocationsHandler,

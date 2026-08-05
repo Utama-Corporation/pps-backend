@@ -121,7 +121,19 @@ router.get(
 router.post(
   "/stock-opname-v2/transaksi/:stockOpnameNo/hasil",
   verifyToken,
+  attachPermissions,
   stockOpnameV2Controller.insertHasilHandler,
+);
+
+// Koreksi scan salah lokasi: hapus baris hasil yang salah supaya labelnya
+// bisa discan ulang dengan lokasi yang benar. Aksi supervisor, bukan alur
+// scan normal — gated permission "stockopname:create".
+router.delete(
+  "/stock-opname-v2/transaksi/:stockOpnameNo/hasil/:labelNo",
+  verifyToken,
+  attachPermissions,
+  requirePermission("stockopname:create"),
+  stockOpnameV2Controller.deleteHasilHandler,
 );
 
 // Rangkuman siapa saja yang sudah scan pada NoSO ini beserta jumlah label

@@ -13,6 +13,7 @@ const {
   calcJamKerjaFromStartEnd,
 } = require("../../../core/utils/jam-kerja-helper");
 const { badReq } = require("../../../core/utils/http-error");
+const { formatDate } = require("../../../core/utils/date-helper");
 
 const IMPORT_AS_GSU_CUTOFF_DATE = "2026-07-01";
 
@@ -445,6 +446,10 @@ async function deleteReturn(noRetur) {
   }
 }
 
+// Bentuk kolom output disamakan dgn label/all (label-service.js, CTE "BB"
+// furniturewip) — LabelCode/DateCreate/NamaJenis/KodeKategori/Kategori/Uom/
+// Blok/IdLokasi/Qty — supaya FE bisa pakai komponen render label yang sama.
+// HasBeenPrinted dipertahankan (field lama, sudah dipakai konsumen existing).
 async function fetchOutputsFurnitureWip(noRetur) {
   const pool = await poolPromise;
   const req = pool.request();
@@ -452,18 +457,30 @@ async function fetchOutputsFurnitureWip(noRetur) {
 
   const q = `
     SELECT DISTINCT
-      d.NoRetur,
-      d.NoFurnitureWIP,
+      fw.NoFurnitureWIP AS LabelCode,
+      fw.DateCreate,
+      mcw.Nama AS NamaJenis,
+      N'furniturewip' AS KodeKategori,
+      N'Furniture WIP' AS Kategori,
+      N'pcs' AS Uom,
+      fw.Blok,
+      fw.IdLokasi,
+      ISNULL(fw.Pcs, 0) AS Qty,
       ISNULL(fw.HasBeenPrinted, 0) AS HasBeenPrinted
     FROM dbo.BJReturFurnitureWIP_d d WITH (NOLOCK)
     LEFT JOIN dbo.FurnitureWIP fw WITH (NOLOCK)
       ON fw.NoFurnitureWIP = d.NoFurnitureWIP
+    LEFT JOIN dbo.MstCabinetWIP mcw WITH (NOLOCK)
+      ON mcw.IdCabinetWIP = fw.IdFurnitureWIP
     WHERE d.NoRetur = @noRetur
-    ORDER BY d.NoFurnitureWIP DESC;
+    ORDER BY fw.NoFurnitureWIP DESC;
   `;
 
   const rs = await req.query(q);
-  return rs.recordset || [];
+  return (rs.recordset || []).map((r) => ({
+    ...r,
+    ...(r.DateCreate && { DateCreate: formatDate(r.DateCreate) }),
+  }));
 }
 
 function buildImportAsGsuGroupedQuery(
@@ -794,6 +811,8 @@ async function executeImportAsGsu(date, items, username) {
   }
 }
 
+// Bentuk kolom output disamakan dgn label/all (label-service.js, CTE "BA"
+// barangjadi) — lihat catatan yang sama di fetchOutputsFurnitureWip di atas.
 async function fetchOutputsBarangJadi(noRetur) {
   const pool = await poolPromise;
   const req = pool.request();
@@ -801,18 +820,30 @@ async function fetchOutputsBarangJadi(noRetur) {
 
   const q = `
     SELECT DISTINCT
-      d.NoRetur,
-      d.NoBJ,
+      bj.NoBJ AS LabelCode,
+      bj.DateCreate,
+      mbj.NamaBJ AS NamaJenis,
+      N'barangjadi' AS KodeKategori,
+      N'Barang Jadi' AS Kategori,
+      N'pcs' AS Uom,
+      bj.Blok,
+      bj.IdLokasi,
+      ISNULL(bj.Pcs, 0) AS Qty,
       ISNULL(bj.HasBeenPrinted, 0) AS HasBeenPrinted
     FROM dbo.BJReturBarangJadi_d d WITH (NOLOCK)
     LEFT JOIN dbo.BarangJadi bj WITH (NOLOCK)
       ON bj.NoBJ = d.NoBJ
+    LEFT JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
+      ON mbj.IdBJ = bj.IdBJ
     WHERE d.NoRetur = @noRetur
-    ORDER BY d.NoBJ DESC;
+    ORDER BY bj.NoBJ DESC;
   `;
 
   const rs = await req.query(q);
-  return rs.recordset || [];
+  return (rs.recordset || []).map((r) => ({
+    ...r,
+    ...(r.DateCreate && { DateCreate: formatDate(r.DateCreate) }),
+  }));
 }
 
 module.exports = {

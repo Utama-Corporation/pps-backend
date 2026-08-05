@@ -204,9 +204,11 @@ async function getOutputsFurnitureWipByNoRetur(req, res) {
 
   try {
     const data = await returnService.fetchOutputsFurnitureWip(noRetur);
-    return res
-      .status(200)
-      .json({ success: true, message: "Outputs retrieved", data });
+    return res.status(200).json({
+      success: true,
+      message: data.length > 0 ? "Data label berhasil diambil" : "Data label tidak ditemukan",
+      data,
+    });
   } catch (e) {
     console.error("[return.getOutputsFurnitureWipByNoRetur]", e);
     return res.status(500).json({
@@ -227,9 +229,11 @@ async function getOutputsBarangJadiByNoRetur(req, res) {
 
   try {
     const data = await returnService.fetchOutputsBarangJadi(noRetur);
-    return res
-      .status(200)
-      .json({ success: true, message: "Outputs retrieved", data });
+    return res.status(200).json({
+      success: true,
+      message: data.length > 0 ? "Data label berhasil diambil" : "Data label tidak ditemukan",
+      data,
+    });
   } catch (e) {
     console.error("[return.getOutputsBarangJadiByNoRetur]", e);
     return res.status(500).json({

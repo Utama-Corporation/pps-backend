@@ -288,7 +288,9 @@ async function getAllProduksi(
       h.CompleteRequestedAt,
       h.CompleteDecisionBy,
       decUser.Username AS CompleteDecisionByUsername,
-      h.CompleteDecisionAt
+      h.CompleteDecisionAt,
+
+      h.CreatedAt
 
     FROM dbo.InjectProduksi_h h WITH (NOLOCK)
     LEFT JOIN dbo.MstMesin    ms WITH (NOLOCK) ON ms.IdMesin    = h.IdMesin
@@ -544,6 +546,7 @@ async function getProduksiByDate(date) {
       CONVERT(VARCHAR(8), h.HourStart, 108) AS HourStart,
       CONVERT(VARCHAR(8), h.HourEnd,   108) AS HourEnd,
       h.InputMode,
+      h.CreatedAt,
       jenisAgg.IdJenis AS IdJenis,
       jenisAgg.NamaJenis AS NamaJenis
     FROM dbo.InjectProduksi_h h WITH (NOLOCK)
@@ -1348,6 +1351,21 @@ async function getInjectQcByNoProduksi(noProduksi) {
   if (!no) throw badReq("noProduksi wajib");
 
   const pool = await poolPromise;
+
+  const headerReq = pool.request();
+  headerReq.input("NoProduksi", sql.VarChar(50), no);
+  const headerRes = await headerReq.query(`
+    SELECT TOP 1
+      NoProduksi,
+      TglProduksi,
+      CreatedAt
+    FROM dbo.InjectProduksi_h WITH (NOLOCK)
+    WHERE NoProduksi = @NoProduksi;
+  `);
+
+  const headerRow = headerRes.recordset?.[0];
+  if (!headerRow) throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+
   const request = pool.request();
   request.input("NoProduksi", sql.VarChar(50), no);
 
@@ -1368,7 +1386,7 @@ async function getInjectQcByNoProduksi(noProduksi) {
     ORDER BY HourStart ASC, Id ASC;
   `);
 
-  return (result.recordset || []).map((row) => ({
+  const items = (result.recordset || []).map((row) => ({
     id: row.Id ?? null,
     noProduksi: row.NoProduksi ?? null,
     hourStart: formatHourStartForResponse(row.HourStart),
@@ -1380,6 +1398,15 @@ async function getInjectQcByNoProduksi(noProduksi) {
     keterangan: row.Keterangan ?? null,
     isDowntime: Boolean(row.IsDowntime),
   }));
+
+  return {
+    header: {
+      noProduksi: headerRow.NoProduksi ?? null,
+      tglProduksi: headerRow.TglProduksi ?? null,
+      createdAt: headerRow.CreatedAt ?? null,
+    },
+    items,
+  };
 }
 
 async function createInjectQc(payload, ctx) {
@@ -3412,7 +3439,8 @@ async function createInjectProduksi(payload, ctx) {
         Hadir int, IdCetakan int, IdWarna int, EnableOffset bit,
         OffsetCurrent int, OffsetNext int, IdFurnitureMaterial int,
         HourMeter decimal(18,2), BeratProdukHasilTimbang decimal(18,2),
-        HourStart time(7), HourEnd time(7), InputMode varchar(20)
+        HourStart time(7), HourEnd time(7), InputMode varchar(20),
+        CreatedAt datetime
       );
 
       INSERT INTO dbo.InjectProduksi_h (
@@ -3449,7 +3477,8 @@ async function createInjectProduksi(payload, ctx) {
         INSERTED.BeratProdukHasilTimbang,
         INSERTED.HourStart,
         INSERTED.HourEnd,
-        INSERTED.InputMode
+        INSERTED.InputMode,
+        INSERTED.CreatedAt
       INTO @tmp
       VALUES (
         @NoProduksi, @IdMesin, @TglProduksi,
@@ -5584,7 +5613,8 @@ async function splitProduksiTime(selector, payload, ctx) {
         HourStart time(7),
         HourEnd time(7),
         IdRegu int,
-        InputMode varchar(20)
+        InputMode varchar(20),
+        CreatedAt datetime
       );
 
       INSERT INTO dbo.InjectProduksi_h (
@@ -5600,7 +5630,8 @@ async function splitProduksiTime(selector, payload, ctx) {
         INSERTED.ApproveBy, INSERTED.JmlhAnggota, INSERTED.Hadir, INSERTED.IdCetakan,
         INSERTED.IdWarna, INSERTED.EnableOffset, INSERTED.OffsetCurrent, INSERTED.OffsetNext,
         INSERTED.IdFurnitureMaterial, INSERTED.HourMeter, INSERTED.BeratProdukHasilTimbang,
-        INSERTED.HourStart, INSERTED.HourEnd, INSERTED.IdRegu, INSERTED.InputMode
+        INSERTED.HourStart, INSERTED.HourEnd, INSERTED.IdRegu, INSERTED.InputMode,
+        INSERTED.CreatedAt
       INTO @out
       SELECT
         @NewNoProduksi,

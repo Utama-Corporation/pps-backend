@@ -68,7 +68,8 @@ BEGIN
                 i.CompleteRequestedBy,
                 i.CompleteRequestedAt,
                 i.CompleteDecisionBy,
-                i.CompleteDecisionAt
+                i.CompleteDecisionAt,
+                i.CreatedAt
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         )
     FROM inserted i
@@ -114,7 +115,8 @@ BEGIN
                 d.CompleteRequestedBy,
                 d.CompleteRequestedAt,
                 d.CompleteDecisionBy,
-                d.CompleteDecisionAt
+                d.CompleteDecisionAt,
+                d.CreatedAt
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         ),
         (
@@ -146,7 +148,8 @@ BEGIN
                 i.CompleteRequestedBy,
                 i.CompleteRequestedAt,
                 i.CompleteDecisionBy,
-                i.CompleteDecisionAt
+                i.CompleteDecisionAt,
+                i.CreatedAt
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         )
     FROM inserted i
@@ -191,7 +194,8 @@ BEGIN
                 d.CompleteRequestedBy,
                 d.CompleteRequestedAt,
                 d.CompleteDecisionBy,
-                d.CompleteDecisionAt
+                d.CompleteDecisionAt,
+                d.CreatedAt
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         ),
         NULL

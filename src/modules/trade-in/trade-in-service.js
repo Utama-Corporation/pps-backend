@@ -8,40 +8,90 @@ const { formatDate } = require("../../core/utils/date-helper");
 // =========================
 // LIST PENERIMAAN
 // =========================
-async function getList(filter) {
+async function getList(page = 1, pageSize = 20, filter = "") {
   const pool = await poolPromise;
-  let query = `
+
+  const p = Math.max(1, Number(page) || 1);
+  const ps = Math.max(1, Math.min(200, Number(pageSize) || 20));
+  const offset = (p - 1) * ps;
+  const filterTerm = String(filter || "").trim();
+
+  const whereClause = `
+    WHERE 1 = 1
+      AND (
+        @Filter = ''
+        OR h.NoPenerimaan LIKE '%' + @Filter + '%'
+        OR ISNULL(h.Supplier, '') LIKE '%' + @Filter + '%'
+        OR ISNULL(sp.SalesPersonName, '') LIKE '%' + @Filter + '%'
+      )
+  `;
+
+  // 1) Count
+  const countQry = `
+    SELECT COUNT(1) AS total
+    FROM dbo.PenerimaanTradeIn_h h WITH (NOLOCK)
+    LEFT JOIN dbo.MstSalesPerson sp WITH (NOLOCK)
+      ON sp.SalesPersonCode = h.SalesPersonCode
+    ${whereClause};
+  `;
+
+  const countReq = pool.request();
+  countReq.input("Filter", sql.VarChar(100), filterTerm);
+  const countRes = await countReq.query(countQry);
+  const total = countRes.recordset?.[0]?.total || 0;
+  if (total === 0) return { data: [], total: 0 };
+
+  // 2) Data (paged) + reject label (OUTER APPLY + TOP 1, konsisten dgn
+  // getDetail — ambil 1 label reject per NoPenerimaan, tidak menggandakan
+  // baris header kalau suatu saat ada >1 link reject utk NoPenerimaan sama)
+  const dataQry = `
     SELECT h.NoPenerimaan,
            h.Tanggal,
            h.Supplier,
            h.SalesPersonCode,
-           ISNULL(sp.SalesPersonName, '') AS SalesPersonName
-      FROM dbo.PenerimaanTradeIn_h h
-      LEFT JOIN dbo.MstSalesPerson sp
+           ISNULL(sp.SalesPersonName, '') AS SalesPersonName,
+           rj.NoReject,
+           rj.IdReject,
+           rj.NamaReject,
+           rj.Berat
+      FROM dbo.PenerimaanTradeIn_h h WITH (NOLOCK)
+      LEFT JOIN dbo.MstSalesPerson sp WITH (NOLOCK)
         ON sp.SalesPersonCode = h.SalesPersonCode
-     WHERE 1 = 1`;
+      OUTER APPLY (
+        SELECT TOP 1 o.NoReject, v.IdReject, r.NamaReject, v.Berat
+          FROM dbo.PenerimaanTradeInOutputRejectV2 o
+          INNER JOIN dbo.RejectV2 v ON v.NoReject = o.NoReject
+          LEFT JOIN dbo.MstReject r ON r.IdReject = v.IdReject
+         WHERE o.NoPenerimaan = h.NoPenerimaan
+      ) rj
+    ${whereClause}
+    ORDER BY h.NoPenerimaan DESC
+    OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
+  `;
 
-  const request = pool.request();
-  if (filter && String(filter).trim() !== "") {
-    query += `
-       AND (
-         h.NoPenerimaan LIKE @Filter
-         OR h.Supplier LIKE @Filter
-         OR sp.SalesPersonName LIKE @Filter
-       )`;
-    request.input("Filter", sql.VarChar(100), `%${String(filter).trim()}%`);
-  }
+  const dataReq = pool.request();
+  dataReq.input("Filter", sql.VarChar(100), filterTerm);
+  dataReq.input("offset", sql.Int, offset);
+  dataReq.input("limit", sql.Int, ps);
 
-  query += ` ORDER BY h.NoPenerimaan DESC`;
-
-  const result = await request.query(query);
-  return result.recordset.map((r) => ({
+  const dataRes = await dataReq.query(dataQry);
+  const data = (dataRes.recordset || []).map((r) => ({
     NoPenerimaan: r.NoPenerimaan,
     Tanggal: r.Tanggal ? formatDate(r.Tanggal) : "-",
     Supplier: r.Supplier || "",
     SalesPersonCode: r.SalesPersonCode || "",
     SalesPersonName: r.SalesPersonName || "",
+    reject: r.NoReject
+      ? {
+          NoReject: r.NoReject,
+          IdReject: r.IdReject,
+          NamaReject: r.NamaReject,
+          Berat: r.Berat,
+        }
+      : null,
   }));
+
+  return { data, total };
 }
 
 // =========================

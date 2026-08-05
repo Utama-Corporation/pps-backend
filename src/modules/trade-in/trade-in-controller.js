@@ -24,13 +24,29 @@ function buildCtx(req) {
 }
 
 // =========================
-// GET /api/trade-in?filter=xxx
+// GET /api/trade-in?filter=xxx&page=1&pageSize=20
 // =========================
 async function getListHandler(req, res) {
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+  const pageSizeRaw = parseInt(req.query.pageSize, 10) || 20;
+  const pageSize = Math.min(Math.max(pageSizeRaw, 1), 100);
+  const filter = req.query.filter ? String(req.query.filter) : "";
+
   try {
-    const filter = req.query.filter ? String(req.query.filter) : "";
-    const data = await getList(filter);
-    return res.json({ success: true, data });
+    const { data, total } = await getList(page, pageSize, filter);
+    return res.json({
+      success: true,
+      totalData: total,
+      data,
+      meta: {
+        page,
+        pageSize,
+        totalPages: Math.max(Math.ceil(total / pageSize), 1),
+        hasNextPage: page * pageSize < total,
+        hasPrevPage: page > 1,
+        filter,
+      },
+    });
   } catch (err) {
     console.error("❌ trade-in getList:", err.message);
     return res.status(500).json({ success: false, message: err.message });

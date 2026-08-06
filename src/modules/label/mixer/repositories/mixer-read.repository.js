@@ -123,7 +123,11 @@ async function getMixerHeaderByNoMixer(noMixer) {
     FROM dbo.Mixer_h h
     JOIN dbo.MstMixer mx ON mx.IdMixer = h.IdMixer
     JOIN dbo.Mixer_d d ON d.NoMixer = h.NoMixer AND d.DateUsage IS NULL
-    LEFT JOIN dbo.MixerPartial mp ON mp.NoMixer = h.NoMixer AND mp.NoSak = d.NoSak
+    LEFT JOIN (
+      SELECT NoMixer, NoSak, SUM(Berat) AS Berat
+      FROM dbo.MixerPartial
+      GROUP BY NoMixer, NoSak
+    ) mp ON mp.NoMixer = h.NoMixer AND mp.NoSak = d.NoSak
     OUTER APPLY (
       SELECT TOP (1) src.OutputNamaMesin, src.Shift
       FROM (

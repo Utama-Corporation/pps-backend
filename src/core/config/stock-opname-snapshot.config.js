@@ -27,7 +27,7 @@ function bahanBakuCteSql() {
   `;
 }
 
-function bahanBakuFinalSelectSql(prefixFilterSql) {
+function bahanBakuFinalSelectSql(conditionSql) {
   return `
     SELECT
       @noso AS NoSO,
@@ -43,6 +43,8 @@ function bahanBakuFinalSelectSql(prefixFilterSql) {
       ON d.NoBahanBaku = p.NoBahanBaku AND d.NoPallet = p.NoPallet AND d.NoSak = p.NoSak
     INNER JOIN dbo.BahanBakuPallet_h AS bbh
       ON bbh.NoBahanBaku = d.NoBahanBaku AND bbh.NoPallet = d.NoPallet
+    LEFT JOIN dbo.MstBahanBaku AS m
+      ON m.IdBB = bbh.IdJenisPlastik
     CROSS APPLY (
       SELECT CASE
         WHEN d.IsPartial = 1 THEN
@@ -52,7 +54,7 @@ function bahanBakuFinalSelectSql(prefixFilterSql) {
       END AS SisaBerat
     ) AS rem
     WHERE d.DateUsage IS NULL
-      AND ${prefixFilterSql}
+      AND (${conditionSql})
     GROUP BY bbh.NoBahanBaku, bbh.NoPallet, bbh.Blok, bbh.IdLokasi, bbh.IdJenisPlastik
     HAVING SUM(rem.SisaBerat) > 0
   `;
@@ -73,7 +75,7 @@ const STOCK_OPNAME_SNAPSHOT_CONFIG = {
     hasDateCreateFilter: false,
     cteSql: bahanBakuCteSql(),
     finalSelectSql: bahanBakuFinalSelectSql(
-      "bbh.NoBahanBaku LIKE 'A.%' AND bbh.NoBahanBaku NOT LIKE 'AB.%'",
+      "(bbh.NoBahanBaku LIKE 'A.%' AND bbh.NoBahanBaku NOT LIKE 'AB.%') AND m.IsProses = 1",
     ),
   },
 
@@ -87,7 +89,9 @@ const STOCK_OPNAME_SNAPSHOT_CONFIG = {
     hasilColumns: ["NoBahanBaku", "NoPallet", "JmlhSak", "Berat"],
     hasDateCreateFilter: false,
     cteSql: bahanBakuCteSql(),
-    finalSelectSql: bahanBakuFinalSelectSql("bbh.NoBahanBaku LIKE 'AB.%'"),
+    finalSelectSql: bahanBakuFinalSelectSql(
+      "bbh.NoBahanBaku LIKE 'AB.%' OR ISNULL(m.IsProses, 0) = 0",
+    ),
   },
 
   washing: {

@@ -10,7 +10,12 @@ const {
   toDateOnly,
   formatYMD,
 } = require("../../core/shared/tutup-transaksi-guard");
-const { badReq, notFound, conflict, forbidden } = require("../../core/utils/http-error");
+const {
+  badReq,
+  notFound,
+  conflict,
+  forbidden,
+} = require("../../core/utils/http-error");
 const {
   STOCK_OPNAME_SNAPSHOT_CONFIG,
 } = require("../../core/config/stock-opname-snapshot.config");
@@ -81,9 +86,8 @@ async function listUsersByLokasi(blok, idLokasi, stockOpnameNo) {
 // "masih berjalan" — begitu NoSO-nya complete, baris dihapus.
 async function listLokasiByUser(idUsername) {
   const pool = await poolPromise;
-  const result = await pool
-    .request()
-    .input("idUsername", sql.Int, idUsername).query(`
+  const result = await pool.request().input("idUsername", sql.Int, idUsername)
+    .query(`
       SELECT a.NoSO, a.Blok, a.IdLokasi, a.IdUsername, a.CreatedAt, l.Description AS description
       FROM [dbo].[MstUserLokasiAccess] a
       LEFT JOIN [dbo].[MstLokasi] l
@@ -204,7 +208,12 @@ async function listAllowedUsersGroupedByLokasi(blok, stockOpnameNo) {
   return map;
 }
 
-async function isUserAllowedForLokasi({ blok, idLokasi, idUsername, stockOpnameNo }) {
+async function isUserAllowedForLokasi({
+  blok,
+  idLokasi,
+  idUsername,
+  stockOpnameNo,
+}) {
   const pool = await poolPromise;
   const noso = String(stockOpnameNo || "").trim();
   const request = pool
@@ -231,7 +240,9 @@ async function getAllKategoriWithStatus({ year, month } = {}) {
   const now = new Date();
 
   const yearNum =
-    year !== undefined && year !== null && year !== "" ? Number(year) : now.getFullYear();
+    year !== undefined && year !== null && year !== ""
+      ? Number(year)
+      : now.getFullYear();
   if (!Number.isInteger(yearNum)) {
     throw badReq("year wajib berupa integer valid");
   }
@@ -365,7 +376,13 @@ async function getAllKategoriWithStatus({ year, month } = {}) {
 // Riwayat sesi stock opname per kategori (termasuk yang sudah lewat bulan/completed).
 // Endpoint kategori (getAllKategoriWithStatus) cuma nunjukin status TERKINI (1 SO
 // teraktif per kategori) — untuk lihat SO bulan-bulan sebelumnya pakai fungsi ini.
-async function getStockOpnameRiwayat({ categoryId, year, month, page = 1, pageSize = 20 }) {
+async function getStockOpnameRiwayat({
+  categoryId,
+  year,
+  month,
+  page = 1,
+  pageSize = 20,
+}) {
   const categoryIdNum = Number(categoryId);
   if (!Number.isInteger(categoryIdNum) || categoryIdNum <= 0) {
     throw badReq("categoryId wajib berupa integer valid");
@@ -380,23 +397,33 @@ async function getStockOpnameRiwayat({ categoryId, year, month, page = 1, pageSi
     `);
   const categoryRow = categoryRes.recordset?.[0];
   if (!categoryRow) {
-    throw notFound(`MstKategori tidak ditemukan untuk categoryId: ${categoryIdNum}`);
+    throw notFound(
+      `MstKategori tidak ditemukan untuk categoryId: ${categoryIdNum}`,
+    );
   }
-  const categoryCode = String(categoryRow.KodeKategori || "").trim().toLowerCase();
+  const categoryCode = String(categoryRow.KodeKategori || "")
+    .trim()
+    .toLowerCase();
   const cfg = STOCK_OPNAME_SNAPSHOT_CONFIG[categoryCode];
 
   const yearNum =
     year !== undefined && year !== null && year !== "" ? Number(year) : null;
   if (
-    year !== undefined && year !== null && year !== "" &&
+    year !== undefined &&
+    year !== null &&
+    year !== "" &&
     !Number.isInteger(yearNum)
   ) {
     throw badReq("year wajib berupa integer valid");
   }
   const monthNum =
-    month !== undefined && month !== null && month !== "" ? Number(month) : null;
+    month !== undefined && month !== null && month !== ""
+      ? Number(month)
+      : null;
   if (
-    month !== undefined && month !== null && month !== "" &&
+    month !== undefined &&
+    month !== null &&
+    month !== "" &&
     (!Number.isInteger(monthNum) || monthNum < 1 || monthNum > 12)
   ) {
     throw badReq("month wajib berupa integer 1-12");
@@ -585,7 +612,9 @@ async function previewStockOpnameLabelCount({ categoryId }) {
     typeId: row.typeId,
     typeName: typeNameById.get(row.typeId) ?? null,
     labelCount: row.labelCount,
-    ...(showWeight ? { totalWeight: row.totalWeight } : { totalPcs: row.totalPcs }),
+    ...(showWeight
+      ? { totalWeight: row.totalWeight }
+      : { totalPcs: row.totalPcs }),
   }));
 
   const labelCount = perJenis.reduce((sum, row) => sum + row.labelCount, 0);
@@ -598,8 +627,16 @@ async function previewStockOpnameLabelCount({ categoryId }) {
     hasDateFilter: cfg.hasDateCreateFilter,
     labelCount,
     ...(showWeight
-      ? { totalWeight: Math.round(perJenis.reduce((sum, row) => sum + (row.totalWeight || 0), 0) * 100) / 100 }
-      : { totalPcs: perJenis.reduce((sum, row) => sum + (row.totalPcs || 0), 0) }),
+      ? {
+          totalWeight:
+            Math.round(
+              perJenis.reduce((sum, row) => sum + (row.totalWeight || 0), 0) *
+                100,
+            ) / 100,
+        }
+      : {
+          totalPcs: perJenis.reduce((sum, row) => sum + (row.totalPcs || 0), 0),
+        }),
     perJenis,
   };
 }
@@ -743,8 +780,11 @@ async function completeStockOpname({ stockOpnameNo, ctx }) {
       throw conflict(`Stock opname ${no} sudah ditandai selesai.`);
     }
 
-    const completeRes = await new sql.Request(tx)
-      .input("stockOpnameNo", sql.VarChar, no).query(`
+    const completeRes = await new sql.Request(tx).input(
+      "stockOpnameNo",
+      sql.VarChar,
+      no,
+    ).query(`
       UPDATE dbo.StockOpname_h
       SET IsComplete = 1, DateComplete = GETDATE()
       OUTPUT INSERTED.DateComplete
@@ -785,9 +825,8 @@ async function getCompleteSummary({ stockOpnameNo }) {
     ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
   ].join(" AND ");
 
-  const totalRes = await pool
-    .request()
-    .input("stockOpnameNo", sql.VarChar, no).query(`
+  const totalRes = await pool.request().input("stockOpnameNo", sql.VarChar, no)
+    .query(`
       SELECT
         COUNT(*) AS labelCount,
         ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
@@ -796,7 +835,10 @@ async function getCompleteSummary({ stockOpnameNo }) {
       LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
       WHERE src.NoSO = @stockOpnameNo;
     `);
-  const totalRow = totalRes.recordset?.[0] || { labelCount: 0, scannedCount: 0 };
+  const totalRow = totalRes.recordset?.[0] || {
+    labelCount: 0,
+    scannedCount: 0,
+  };
   const labelCount = totalRow.labelCount || 0;
   const scannedCount = totalRow.scannedCount || 0;
 
@@ -879,7 +921,9 @@ async function getTypesInStockOpname({ stockOpnameNo }) {
     typeName: typeNameById.get(row.typeId) ?? null,
     labelCount: row.labelCount,
     scannedCount: row.scannedCount,
-    ...(showWeight ? { totalWeight: row.totalWeight } : { totalPcs: row.totalPcs }),
+    ...(showWeight
+      ? { totalWeight: row.totalWeight }
+      : { totalPcs: row.totalPcs }),
   }));
 
   return {
@@ -960,11 +1004,19 @@ async function getStockOpnameSnapshot({
   const whereSearch = searchTerm ? `AND src.${labelColumn} LIKE @search` : "";
   const whereType =
     typeIdNum !== null ? `AND src.${cfg.jenisColumn} = @typeId` : "";
+  // Blok tidak diketahui = satu bucket gabungan (locationId selalu 0, lihat
+  // getLocationsInBlok) yang mengabaikan IdLokasi sama sekali — hanya
+  // Blok IS NULL yang jadi syarat. Ikuti kontrak yang sama di sini supaya
+  // jumlah label di summary blok/lokasi konsisten dengan detail label.
   const whereLocation =
     locationIdNum !== null
-      ? `AND ${isUnknownBlok ? "src.Blok IS NULL" : "src.Blok = @blok"} AND ${
-          isUnknownLocation ? "src.IdLokasi IS NULL" : "src.IdLokasi = @locationId"
-        }`
+      ? isUnknownBlok
+        ? "AND src.Blok IS NULL"
+        : `AND src.Blok = @blok AND ${
+            isUnknownLocation
+              ? "src.IdLokasi IS NULL"
+              : "src.IdLokasi = @locationId"
+          }`
       : "";
 
   const bindInputs = (req) => {
@@ -1036,7 +1088,8 @@ async function getStockOpnameSnapshot({
     if (!groupsByTypeId.has(rowTypeId)) {
       groupsByTypeId.set(rowTypeId, {
         typeId: rowTypeId,
-        typeName: rowTypeId !== null ? typeNameById.get(rowTypeId) ?? null : null,
+        typeName:
+          rowTypeId !== null ? (typeNameById.get(rowTypeId) ?? null) : null,
         labelCount: 0,
         ...(showWeight ? { totalWeight: 0 } : { totalPcs: 0 }),
         labels: [],
@@ -1045,7 +1098,8 @@ async function getStockOpnameSnapshot({
     const group = groupsByTypeId.get(rowTypeId);
     group.labelCount += 1;
     if (showWeight) {
-      group.totalWeight = Math.round((group.totalWeight + (row.Berat ?? 0)) * 100) / 100;
+      group.totalWeight =
+        Math.round((group.totalWeight + (row.Berat ?? 0)) * 100) / 100;
     } else {
       group.totalPcs += row.Pcs ?? 0;
     }
@@ -1097,9 +1151,7 @@ async function getAllBlok({ stockOpnameNo }) {
   // locationCount dihitung dari snapshot stock opname, bukan dari master lokasi.
   // Ini menjaga daftar blok tetap mengikuti data acuan yang benar-benar
   // ter-snapshot, termasuk lokasi yang belum punya mapping master.
-  const res = await pool
-    .request()
-    .input("stockOpnameNo", sql.VarChar, no)
+  const res = await pool.request().input("stockOpnameNo", sql.VarChar, no)
     .query(`
       SELECT
         src.Blok AS blok,
@@ -1119,8 +1171,7 @@ async function getAllBlok({ stockOpnameNo }) {
   // (lihat catatan di listLokasiByUser).
   const workingRes = await pool
     .request()
-    .input("stockOpnameNo", sql.VarChar, no)
-    .query(`
+    .input("stockOpnameNo", sql.VarChar, no).query(`
       SELECT a.Blok, a.IdLokasi, l.Description AS description,
         a.IdUsername, u.Username, u.FName, u.LName
       FROM [dbo].[MstUserLokasiAccess] a
@@ -1163,7 +1214,9 @@ async function getAllBlok({ stockOpnameNo }) {
       locationCount: r.blok === null ? 1 : r.locationCount,
       labelCount: r.labelCount,
       scannedCount: r.scannedCount,
-      ...(showWeight ? { totalWeight: r.totalWeight } : { totalPcs: r.totalPcs }),
+      ...(showWeight
+        ? { totalWeight: r.totalWeight }
+        : { totalPcs: r.totalPcs }),
       workingLocationCount: workingLocations.length,
       workingLocations,
     };
@@ -1199,8 +1252,12 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
 
   // Dipakai FE utk nampilin siapa saja user yang boleh akses tiap lokasi
   // (lihat gating di stock-opname-v2-routes.js pada endpoint .../lokasi/:locationId/label).
-  const allowedUsersByLokasi = await listAllowedUsersGroupedByLokasi(blokTrim, no);
-  const getAllowedUsers = (locationId) => allowedUsersByLokasi.get(locationId) || [];
+  const allowedUsersByLokasi = await listAllowedUsersGroupedByLokasi(
+    blokTrim,
+    no,
+  );
+  const getAllowedUsers = (locationId) =>
+    allowedUsersByLokasi.get(locationId) || [];
 
   const scannedMatchSql = [
     "h.NoSO = src.NoSO",
@@ -1284,10 +1341,13 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
       labelCount: row.labelCount,
       scannedCount: row.scannedCount,
       allowedUsers: getAllowedUsers(row.locationId),
-      ...(showWeight ? { totalWeight: row.totalWeight } : { totalPcs: row.totalPcs }),
+      ...(showWeight
+        ? { totalWeight: row.totalWeight }
+        : { totalPcs: row.totalPcs }),
     }));
 
-  const unknownLocationSummary = summaryRows.find((row) => row.locationId === null) || null;
+  const unknownLocationSummary =
+    summaryRows.find((row) => row.locationId === null) || null;
   if (unknownLocationSummary) {
     data.push({
       locationId: UNKNOWN_LOCATION_ID,
@@ -1345,7 +1405,11 @@ function formatSqlDateTime(value) {
 // yang jadi tugas user yang login, berdasarkan MstUserLokasiAccess. User
 // dengan bypass (super admin / "stockopname:create", lihat
 // requireLokasiAccess) melihat seluruh lokasi pada NoSO tsb tanpa filter.
-async function getMyLokasiForStockOpname({ stockOpnameNo, idUsername, isBypass }) {
+async function getMyLokasiForStockOpname({
+  stockOpnameNo,
+  idUsername,
+  isBypass,
+}) {
   const pool = await poolPromise;
   const { no, header, categoryRow, categoryCode, cfg } =
     await resolveStockOpnameCategory(pool, stockOpnameNo);
@@ -1398,7 +1462,9 @@ async function getMyLokasiForStockOpname({ stockOpnameNo, idUsername, isBypass }
     description: row.description ?? `Lokasi ${row.locationId}`,
     labelCount: row.labelCount,
     scannedCount: row.scannedCount,
-    ...(showWeight ? { totalWeight: row.totalWeight } : { totalPcs: row.totalPcs }),
+    ...(showWeight
+      ? { totalWeight: row.totalWeight }
+      : { totalPcs: row.totalPcs }),
   }));
 
   return {
@@ -1437,7 +1503,9 @@ async function listMyLokasiWithLabelCount(idUsername) {
   const categoryByNoso = new Map(
     (catRes.recordset || []).map((r) => [
       r.NoSO,
-      String(r.KodeKategori || "").trim().toLowerCase(),
+      String(r.KodeKategori || "")
+        .trim()
+        .toLowerCase(),
     ]),
   );
 
@@ -1492,7 +1560,8 @@ async function listMyLokasiWithLabelCount(idUsername) {
         categoryCode,
         blok: assignedRow.Blok,
         locationId: assignedRow.IdLokasi,
-        description: assignedRow.description ?? `Lokasi ${assignedRow.IdLokasi}`,
+        description:
+          assignedRow.description ?? `Lokasi ${assignedRow.IdLokasi}`,
         labelCount: snap?.labelCount ?? 0,
         scannedCount: snap?.scannedCount ?? 0,
         ...(showWeight
@@ -1553,7 +1622,8 @@ async function insertStockOpnameHasil({
   // Lokasi hasil scan opsional: kalau tidak dikirim, dianggap sama dengan acuan
   // (tidak ada koreksi). Kalau dikirim, blok & locationId wajib sepasang —
   // IdLokasi bukan unique sendirian, komposit dengan Blok.
-  const blokProvided = blok !== undefined && blok !== null && String(blok).trim() !== "";
+  const blokProvided =
+    blok !== undefined && blok !== null && String(blok).trim() !== "";
   const locationIdProvided =
     locationId !== undefined && locationId !== null && locationId !== "";
   if (blokProvided !== locationIdProvided) {
@@ -1617,7 +1687,9 @@ async function insertStockOpnameHasil({
   }
 
   // Default ke lokasi acuan kalau operator tidak mengirim lokasi hasil scan.
-  const scannedBlok = blokProvided ? scannedBlokInput : (referenceRow.Blok ?? null);
+  const scannedBlok = blokProvided
+    ? scannedBlokInput
+    : (referenceRow.Blok ?? null);
   const scannedLocationId = blokProvided
     ? scannedLocationIdInput
     : (referenceRow.IdLokasi ?? null);
@@ -1628,7 +1700,11 @@ async function insertStockOpnameHasil({
   // User harus ditugaskan (MstUserLokasiAccess) ke Blok/Lokasi yang dia scan,
   // kecuali admin (bypassLokasiCheck dari permission "*"/"stockopname:create")
   // atau lokasi hasil scan tidak diketahui (tidak ada Blok/Lokasi konkret utk dicek).
-  if (!ctx?.bypassLokasiCheck && scannedBlok != null && scannedLocationId != null) {
+  if (
+    !ctx?.bypassLokasiCheck &&
+    scannedBlok != null &&
+    scannedLocationId != null
+  ) {
     const allowed = await isUserAllowedForLokasi({
       blok: scannedBlok,
       idLokasi: scannedLocationId,
@@ -1678,7 +1754,8 @@ async function insertStockOpnameHasil({
     sackCount: hasSackCount ? (referenceRow.JmlhSak ?? 0) : undefined,
     pieceCount: hasPieceCount ? (referenceRow.Pcs ?? 0) : undefined,
     // Furniture WIP dihitung per pcs, bukan berat.
-    weight: categoryCode === "furniturewip" ? undefined : (referenceRow.Berat ?? 0),
+    weight:
+      categoryCode === "furniturewip" ? undefined : (referenceRow.Berat ?? 0),
     referenceBlok: referenceRow.Blok ?? null,
     referenceLocationId: referenceRow.IdLokasi ?? null,
     scannedBlok: scannedBlok ?? UNKNOWN_BLOK_CODE,
@@ -1760,9 +1837,8 @@ async function getScanUserSummary({ stockOpnameNo }) {
   // Furniture WIP dihitung per pcs, bukan berat.
   const showWeight = categoryCode !== "furniturewip";
 
-  const res = await pool
-    .request()
-    .input("stockOpnameNo", sql.VarChar, no).query(`
+  const res = await pool.request().input("stockOpnameNo", sql.VarChar, no)
+    .query(`
       SELECT
         h.Username AS username,
         u.FName,
@@ -1785,7 +1861,9 @@ async function getScanUserSummary({ stockOpnameNo }) {
     labelCount: row.labelCount,
     firstScanAt: row.firstScanAt,
     lastScanAt: row.lastScanAt,
-    ...(showWeight ? { totalWeight: row.totalWeight } : { totalPcs: row.totalPcs }),
+    ...(showWeight
+      ? { totalWeight: row.totalWeight }
+      : { totalPcs: row.totalPcs }),
   }));
 
   return {

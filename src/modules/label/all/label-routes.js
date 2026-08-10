@@ -14,4 +14,11 @@ router.put(
   labelController.updateLabelLocationHandler,
 );
 
+// 🔥 Riwayat perpindahan Blok/IdLokasi berdasarkan NomorLabel
+router.get(
+  "/label/history-lokasi/:labelCode",
+  verifyToken,
+  labelController.getLabelLocationHistoryHandler,
+);
+
 module.exports = router;

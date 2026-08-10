@@ -665,6 +665,35 @@ function getAvailabilityCheckSQL(prefix, tableName) {
 // TODO: aktifkan kembali precondition kategori/jenis (MstLokasiJenis) setelah data master siap.
 const ENABLE_KATEGORI_JENIS_PRECONDITION = false;
 
+// Mapping prefix label -> nama tabel header (dipakai update lokasi & riwayat lokasi)
+function resolveLabelTable(prefix) {
+  switch (prefix) {
+    case "A":
+    case "AB":
+      return "dbo.BahanBakuPallet_h";
+    case "B":
+      return "dbo.Washing_h";
+    case "D":
+      return "dbo.Broker_h";
+    case "F":
+      return "dbo.Crusher";
+    case "M":
+      return "dbo.Bonggolan";
+    case "V":
+      return "dbo.Gilingan";
+    case "H":
+      return "dbo.Mixer_h";
+    case "BB":
+      return "dbo.FurnitureWIP";
+    case "BA":
+      return "dbo.BarangJadi";
+    case "BF":
+      return "dbo.RejectV2";
+    default:
+      return null;
+  }
+}
+
 async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   const pool = await poolPromise;
 
@@ -696,45 +725,13 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   const prefix = (parts[0] || "").toUpperCase();
 
   // Mapping tabel berdasarkan prefix
-  let tableName = "";
-  switch (prefix) {
-    case "A":
-    case "AB":
-      tableName = "dbo.BahanBakuPallet_h";
-      break;
-    case "B":
-      tableName = "dbo.Washing_h";
-      break;
-    case "D":
-      tableName = "dbo.Broker_h";
-      break;
-    case "F":
-      tableName = "dbo.Crusher";
-      break;
-    case "M":
-      tableName = "dbo.Bonggolan";
-      break;
-    case "V":
-      tableName = "dbo.Gilingan";
-      break;
-    case "H":
-      tableName = "dbo.Mixer_h";
-      break;
-    case "BB":
-      tableName = "dbo.FurnitureWIP";
-      break;
-    case "BA":
-      tableName = "dbo.BarangJadi";
-      break;
-    case "BF":
-      tableName = "dbo.RejectV2";
-      break;
-    default:
-      return {
-        success: false,
-        code: "UNKNOWN_PREFIX",
-        message: `Prefix ${prefix} tidak dikenali untuk nomor label ${labelCode}`,
-      };
+  const tableName = resolveLabelTable(prefix);
+  if (!tableName) {
+    return {
+      success: false,
+      code: "UNKNOWN_PREFIX",
+      message: `Prefix ${prefix} tidak dikenali untuk nomor label ${labelCode}`,
+    };
   }
 
   const labelCol =
@@ -891,6 +888,84 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
       afterIdLokasi: idLokasiInt,
       idUsername,
     },
+  };
+}
+
+// =====================
+// Riwayat perpindahan Blok/IdLokasi suatu label (dari dbo.AuditTrail)
+// =====================
+async function getLabelLocationHistory(labelCode) {
+  const pool = await poolPromise;
+
+  const parts = String(labelCode).split(".");
+  const prefix = (parts[0] || "").toUpperCase();
+
+  const tableName = resolveLabelTable(prefix);
+  if (!tableName) {
+    return {
+      success: false,
+      code: "UNKNOWN_PREFIX",
+      message: `Prefix ${prefix} tidak dikenali untuk nomor label ${labelCode}`,
+    };
+  }
+
+  if (prefix === "A" || prefix === "AB") {
+    return {
+      success: false,
+      code: "NOT_SUPPORTED",
+      message: `Riwayat perpindahan lokasi untuk label bahan-baku (${labelCode}) belum didukung karena tabel BahanBakuPallet_h belum memiliki trigger audit`,
+    };
+  }
+
+  const pkField = getLabelColumn(prefix);
+  const auditTableName = tableName.replace(/^dbo\./i, "");
+
+  const result = await pool
+    .request()
+    .input("TableName", sql.NVarChar(128), auditTableName)
+    .input("LabelCode", sql.NVarChar(50), labelCode).query(`
+      SELECT
+        a.AuditId,
+        a.EventTime,
+        a.Actor,
+        u.Username AS ActorUsername,
+        a.RequestId,
+        JSON_VALUE(a.OldData, '$.Blok') AS BeforeBlok,
+        TRY_CONVERT(int, JSON_VALUE(a.OldData, '$.IdLokasi')) AS BeforeIdLokasi,
+        JSON_VALUE(a.NewData, '$.Blok') AS AfterBlok,
+        TRY_CONVERT(int, JSON_VALUE(a.NewData, '$.IdLokasi')) AS AfterIdLokasi
+      FROM dbo.AuditTrail a
+      LEFT JOIN dbo.MstUsername u ON u.IdUsername = TRY_CONVERT(int, a.Actor)
+      WHERE a.TableName = @TableName
+        AND a.Action = 'UPDATE'
+        AND JSON_VALUE(a.PK, '$.${pkField}') = @LabelCode
+      ORDER BY a.EventTime ASC, a.AuditId ASC
+    `);
+
+  const history = (result.recordset || [])
+    .filter(
+      (r) =>
+        (r.BeforeBlok ?? null) !== (r.AfterBlok ?? null) ||
+        (r.BeforeIdLokasi ?? null) !== (r.AfterIdLokasi ?? null),
+    )
+    .map((r) => ({
+      eventTime: r.EventTime,
+      actorId: r.Actor,
+      actorUsername: r.ActorUsername || null,
+      requestId: r.RequestId,
+      beforeBlok: r.BeforeBlok,
+      beforeIdLokasi: r.BeforeIdLokasi,
+      afterBlok: r.AfterBlok,
+      afterIdLokasi: r.AfterIdLokasi,
+    }));
+
+  return {
+    success: true,
+    message: history.length
+      ? `Riwayat perpindahan lokasi label ${labelCode} berhasil diambil`
+      : `Belum ada riwayat perpindahan lokasi untuk label ${labelCode}`,
+    labelCode,
+    history,
   };
 }
 
@@ -1121,4 +1196,9 @@ async function getAllLabelsV2(
   };
 }
 
-module.exports = { getAllLabels, getAllLabelsV2, updateLabelLocation };
+module.exports = {
+  getAllLabels,
+  getAllLabelsV2,
+  updateLabelLocation,
+  getLabelLocationHistory,
+};

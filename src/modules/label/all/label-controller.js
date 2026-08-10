@@ -93,6 +93,44 @@ async function updateLabelLocationHandler(req, res) {
 }
 
 
+// Kode kegagalan dari service -> status HTTP yang sesuai
+const HISTORY_LOKASI_ERROR_STATUS = {
+  UNKNOWN_PREFIX: 400,
+  NOT_SUPPORTED: 422,
+};
+
+// 🟢 Handler baru: Riwayat perpindahan Blok/IdLokasi berdasarkan NomorLabel
+async function getLabelLocationHistoryHandler(req, res) {
+  try {
+    const { labelCode } = req.params;
+
+    if (!labelCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'labelCode wajib dikirim di path',
+      });
+    }
+
+    const result = await labelService.getLabelLocationHistory(labelCode);
+
+    if (!result.success) {
+      const status = HISTORY_LOKASI_ERROR_STATUS[result.code] || 400;
+      return res.status(status).json(result);
+    }
+
+    return res.json(result);
+
+  } catch (err) {
+    console.error('Error fetching label location history:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Terjadi kesalahan server',
+      error: err.message
+    });
+  }
+}
+
+
 async function getAllLabelsV2Handler(req, res) {
   const { username } = req;
   const page = parseInt(req.query.page) || 1;
@@ -130,5 +168,6 @@ async function getAllLabelsV2Handler(req, res) {
 module.exports = {
   getAllLabelsHandler,
   getAllLabelsV2Handler,
-  updateLabelLocationHandler
+  updateLabelLocationHandler,
+  getLabelLocationHistoryHandler
 };

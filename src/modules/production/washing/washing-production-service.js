@@ -88,7 +88,6 @@ async function getAllProduksi(
   tanggal = null,
   shift = null,
   complete = null,
-  verified = null,
 ) {
   const pool = await poolPromise;
 
@@ -104,10 +103,6 @@ async function getAllProduksi(
       AND (@tanggal IS NULL OR CONVERT(date, h.TglProduksi) = @tanggal)
       AND (@shift IS NULL OR h.Shift = @shift)
       AND (@complete IS NULL OR h.IsComplete = @complete)
-      AND (
-        @verified IS NULL
-        OR (CASE WHEN h.VerifiedAt IS NOT NULL THEN 1 ELSE 0 END) = @verified
-      )
   `;
 
   // 1) Total baris (tetap sederhana)
@@ -123,7 +118,6 @@ async function getAllProduksi(
   countReq.input("tanggal", sql.Date, tanggal);
   countReq.input("shift", sql.Int, shift);
   countReq.input("complete", sql.Bit, complete);
-  countReq.input("verified", sql.Bit, verified);
 
   const countRes = await countReq.query(countQry);
   const total = countRes.recordset?.[0]?.total || 0;
@@ -185,10 +179,6 @@ async function getAllProduksi(
       h.JamKerja,
       h.Shift,
       h.IsComplete,
-      CASE WHEN h.VerifiedAt IS NOT NULL THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Verified,
-      h.VerifiedBy,
-      h.VerifiedAt,
-      h.VerifiedNote,
       h.CreateBy,
       h.CheckBy1,
       h.CheckBy2,
@@ -236,7 +226,6 @@ async function getAllProduksi(
   dataReq.input("tanggal", sql.Date, tanggal);
   dataReq.input("shift", sql.Int, shift);
   dataReq.input("complete", sql.Bit, complete);
-  dataReq.input("verified", sql.Bit, verified);
   dataReq.input("offset", sql.Int, offset);
   dataReq.input("limit", sql.Int, ps);
 

@@ -145,6 +145,15 @@ router.get(
   stockOpnameV2Controller.getScanUserSummaryHandler,
 );
 
+// Laporan cetak (PDF) — rangkuman total/per-jenis/per-blok/per-user scan,
+// dipakai kepala gudang untuk arsip fisik / lampiran setelah SO selesai
+// (tapi juga bisa dicetak kapan saja selama SO masih berjalan).
+router.get(
+  "/stock-opname-v2/transaksi/:stockOpnameNo/laporan/pdf",
+  verifyToken,
+  stockOpnameV2Controller.getLaporanPdfHandler,
+);
+
 router.get(
   "/stock-opname-v2/transaksi/:stockOpnameNo/blok",
   verifyToken,

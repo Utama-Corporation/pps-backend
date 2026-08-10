@@ -333,7 +333,9 @@ async function getJenisInNosoHandler(req, res) {
   );
 
   try {
-    const result = await stockOpnameV2Service.getTypesInStockOpname({ stockOpnameNo });
+    const result = await stockOpnameV2Service.getTypesInStockOpname({
+      stockOpnameNo,
+    });
 
     if (!result.data.length) {
       return res.status(404).json({
@@ -425,11 +427,16 @@ async function insertHasilHandler(req, res) {
   const { labelNo, blok, locationId } = req.body || {};
 
   console.log(
-    "Insert stock-opname hasil | Username:", req.username,
-    "| stockOpnameNo:", stockOpnameNo,
-    "| labelNo:", labelNo,
-    "| blok:", blok,
-    "| locationId:", locationId,
+    "Insert stock-opname hasil | Username:",
+    req.username,
+    "| stockOpnameNo:",
+    stockOpnameNo,
+    "| labelNo:",
+    labelNo,
+    "| blok:",
+    blok,
+    "| locationId:",
+    locationId,
   );
 
   try {
@@ -476,9 +483,12 @@ async function deleteHasilHandler(req, res) {
   const { stockOpnameNo, labelNo } = req.params;
 
   console.log(
-    "Delete stock-opname hasil | Username:", actorUsername,
-    "| stockOpnameNo:", stockOpnameNo,
-    "| labelNo:", labelNo,
+    "Delete stock-opname hasil | Username:",
+    actorUsername,
+    "| stockOpnameNo:",
+    stockOpnameNo,
+    "| labelNo:",
+    labelNo,
   );
 
   try {
@@ -548,6 +558,37 @@ async function getScanUserSummaryHandler(req, res) {
   }
 }
 
+async function getLaporanPdfHandler(req, res) {
+  const { stockOpnameNo } = req.params;
+
+  console.log(
+    "Generating laporan PDF (stock-opname-v2) | Username:",
+    req.username,
+    "| stockOpnameNo:",
+    stockOpnameNo,
+  );
+
+  try {
+    const pdfBuffer = await stockOpnameV2Service.getLaporanStockOpnamePdf({
+      stockOpnameNo,
+    });
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="Laporan-StockOpname-${stockOpnameNo}.pdf"`,
+    );
+    return res.send(Buffer.from(pdfBuffer));
+  } catch (error) {
+    console.error("Error generating laporan PDF (stock-opname-v2):", error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+      code: error.code,
+    });
+  }
+}
+
 async function listBlokHandler(req, res) {
   const { stockOpnameNo } = req.params;
 
@@ -597,7 +638,10 @@ async function getLocationsHandler(req, res) {
   );
 
   try {
-    const result = await stockOpnameV2Service.getLocationsInBlok({ stockOpnameNo, blok });
+    const result = await stockOpnameV2Service.getLocationsInBlok({
+      stockOpnameNo,
+      blok,
+    });
 
     if (!result.data.length) {
       return res.status(404).json({
@@ -738,7 +782,9 @@ async function listLokasiByUserHandler(req, res) {
   const { idUsername } = req.params;
 
   try {
-    const data = await stockOpnameV2Service.listLokasiByUser(Number(idUsername));
+    const data = await stockOpnameV2Service.listLokasiByUser(
+      Number(idUsername),
+    );
     return res.json({
       success: true,
       message: "Data lokasi user berhasil diambil",
@@ -829,6 +875,7 @@ module.exports = {
   insertHasilHandler,
   deleteHasilHandler,
   getScanUserSummaryHandler,
+  getLaporanPdfHandler,
   listBlokHandler,
   getLocationsHandler,
   getMyLokasiHandler,

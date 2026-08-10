@@ -71,6 +71,84 @@ function addDays(dateString, dayOffset) {
   return `${baseDate.getFullYear()}-${pad2(baseDate.getMonth() + 1)}-${pad2(baseDate.getDate())}`;
 }
 
+function parseMinutesHM(hhmm) {
+  const m = /^(\d{2}):(\d{2})/.exec(hhmm || "");
+  if (!m) return null;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+function fmtHM(totalMinutes) {
+  const minOfDay = ((totalMinutes % (24 * 60)) + 24 * 60) % (24 * 60);
+  return `${pad2(Math.floor(minOfDay / 60))}:${pad2(minOfDay % 60)}`;
+}
+
+// Bangun instant "YYYY-MM-DDTHH:mm:00" (naive, tanpa offset/Z) untuk
+// tglDateStr + (baseMinutes + offsetMinutes) menit sejak tengah malam,
+// menangani rollover ke hari berikutnya (mis. shift 23:00-07:00).
+// Sengaja tidak pakai epoch/UTC/Date server (host backend belum tentu WIB —
+// lihat komentar resolveEffectiveDateForCreate) — string naive ini diparse
+// device sebagai local time apa adanya via DateTime.parse, jadi kebenaran
+// jam "sekarang" tetap ditentukan device, bukan clock server.
+function buildQcBucketInstant(tglDateStr, baseMinutes, offsetMinutes) {
+  const totalMin = baseMinutes + offsetMinutes;
+  const dayOffset = Math.floor(totalMin / (24 * 60));
+  const minOfDay = ((totalMin % (24 * 60)) + 24 * 60) % (24 * 60);
+  const dateStr = dayOffset === 0 ? tglDateStr : addDays(tglDateStr, dayOffset);
+  const hh = pad2(Math.floor(minOfDay / 60));
+  const mm = pad2(minOfDay % 60);
+  return `${dateStr}T${hh}:${mm}:00`;
+}
+
+// Pecah range [hourStart, hourEnd) produksi menjadi bucket per jam, sama
+// seperti _computeBuckets/_populateBucketTimes di inject_qc_dialog.dart —
+// tapi anchor tanggalnya SELALU tglProduksi asli dari InjectProduksi_h,
+// tidak pernah ditebak dari "hari ini/kemarin" seperti versi lama di
+// frontend (itu penyebab bug: data lampau yang jam-of-day-nya kebetulan
+// mirip shift hari ini malah dikira baru mau dibuka hari ini).
+function buildQcBuckets(tglProduksi, hourStartRaw, hourEndRaw) {
+  const tglDateStr = toDateOnlyString(tglProduksi);
+  const startMin = parseMinutesHM(normalizeTimeString(hourStartRaw));
+  const endMin = parseMinutesHM(normalizeTimeString(hourEndRaw));
+  if (!tglDateStr || startMin == null || endMin == null) return [];
+
+  let duration = endMin - startMin;
+  if (duration <= 0) duration += 24 * 60;
+  if (duration <= 0) return [];
+
+  const startRem = startMin % 60;
+  const firstStep = startRem === 0 ? 60 : 60 - startRem;
+
+  const buckets = [];
+  let offset = 0;
+  while (offset < duration) {
+    const step = offset === 0 && startRem !== 0 ? firstStep : 60;
+    const nextOffset = Math.min(offset + step, duration);
+    buckets.push({
+      hourStart: fmtHM(startMin + offset),
+      hourEnd: fmtHM(startMin + nextOffset),
+      opensAt: buildQcBucketInstant(tglDateStr, startMin, nextOffset),
+      _nextOffset: nextOffset,
+    });
+    offset = nextOffset;
+  }
+
+  for (let i = 0; i < buckets.length; i++) {
+    if (i + 1 < buckets.length) {
+      buckets[i].closesAt = buckets[i + 1].opensAt;
+    } else {
+      buckets[i].closesAt = buildQcBucketInstant(
+        tglDateStr,
+        startMin,
+        buckets[i]._nextOffset + 60,
+      );
+    }
+    delete buckets[i]._nextOffset;
+    buckets[i].label = `${buckets[i].hourStart} - ${buckets[i].hourEnd}`;
+  }
+
+  return buckets;
+}
+
 function isCurrentProduksi({
   tglProduksi,
   hourStart,
@@ -1358,7 +1436,10 @@ async function getInjectQcByNoProduksi(noProduksi) {
     SELECT TOP 1
       NoProduksi,
       TglProduksi,
-      CreatedAt
+      CreatedAt,
+      Shift,
+      CONVERT(VARCHAR(8), HourStart, 108) AS HourStart,
+      CONVERT(VARCHAR(8), HourEnd,   108) AS HourEnd
     FROM dbo.InjectProduksi_h WITH (NOLOCK)
     WHERE NoProduksi = @NoProduksi;
   `);
@@ -1399,13 +1480,23 @@ async function getInjectQcByNoProduksi(noProduksi) {
     isDowntime: Boolean(row.IsDowntime),
   }));
 
+  const buckets = buildQcBuckets(
+    headerRow.TglProduksi,
+    headerRow.HourStart,
+    headerRow.HourEnd,
+  );
+
   return {
     header: {
       noProduksi: headerRow.NoProduksi ?? null,
       tglProduksi: headerRow.TglProduksi ?? null,
       createdAt: headerRow.CreatedAt ?? null,
+      shift: headerRow.Shift ?? null,
+      hourStart: formatHourStartForResponse(headerRow.HourStart),
+      hourEnd: formatHourStartForResponse(headerRow.HourEnd),
     },
     items,
+    buckets,
   };
 }
 

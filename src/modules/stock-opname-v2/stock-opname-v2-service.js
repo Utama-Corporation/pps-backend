@@ -1,3 +1,4 @@
+const puppeteer = require("puppeteer");
 const { sql, poolPromise } = require("../../core/config/db");
 const {
   getAllKategori,
@@ -19,6 +20,9 @@ const {
 const {
   STOCK_OPNAME_SNAPSHOT_CONFIG,
 } = require("../../core/config/stock-opname-snapshot.config");
+const {
+  buildStockOpnameV2ReportHtml,
+} = require("../../core/utils/pdf/templates/stock-opname-v2-pdf/stock-opname-v2-report-pdf");
 const MAX_LOKASI_PER_USER = 2;
 
 const STOCK_OPNAME_STATUS = {
@@ -1879,6 +1883,241 @@ async function getScanUserSummary({ stockOpnameNo }) {
   };
 }
 
+// Dipakai laporan cetak — daftar label yang BELUM discan (src tanpa
+// pasangan di tabel hasil), supaya kepala gudang tahu persis label mana
+// saja yang masih perlu dicari, bukan cuma angka rekapnya.
+async function getUnscannedLabels({ stockOpnameNo }) {
+  const pool = await poolPromise;
+  const { no, header, categoryCode, cfg } = await resolveStockOpnameCategory(
+    pool,
+    stockOpnameNo,
+  );
+
+  // Furniture WIP dihitung per pcs, bukan berat — sama seperti flag
+  // showWeight di getCompleteSummary/getTypesInStockOpname.
+  const showWeight = categoryCode !== "furniturewip";
+  const metricColumn = showWeight ? "Berat" : "Pcs";
+
+  const scannedMatchSql = [
+    "h.NoSO = src.NoSO",
+    ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
+  ].join(" AND ");
+  const labelColumnsSql = cfg.labelColumns.map((c) => `src.${c}`).join(", ");
+
+  const res = await pool.request().input("stockOpnameNo", sql.VarChar, no)
+    .query(`
+      SELECT ${labelColumnsSql}, src.Blok, src.IdLokasi, src.${cfg.jenisColumn} AS typeId,
+        src.${metricColumn} AS metricValue
+      FROM dbo.${cfg.snapshotTable} AS src
+      LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
+      WHERE src.NoSO = @stockOpnameNo AND h.${cfg.labelColumns[0]} IS NULL
+      ORDER BY src.Blok ASC, src.IdLokasi ASC, ${labelColumnsSql} ASC;
+    `);
+
+  const typeMaster = await getJenisByKategori(header.IdKategori);
+  const typeNameById = new Map(
+    (typeMaster?.jenis || []).map((j) => [j.IdJenis, j.NamaJenis]),
+  );
+
+  // Kategori bahan baku punya label komposit (NoBahanBaku + NoPallet) —
+  // sambung dengan "-" persis seperti [SoV2LabelRow.primaryValue] di FE.
+  const data = (res.recordset || []).map((row) => ({
+    labelNo: cfg.labelColumns.map((c) => row[c]).join("-"),
+    blok: row.Blok ?? UNKNOWN_BLOK_CODE,
+    locationId: row.IdLokasi ?? UNKNOWN_LOCATION_ID,
+    typeId: row.typeId,
+    typeName: typeNameById.get(row.typeId) ?? null,
+    ...(showWeight
+      ? { weight: row.metricValue ?? 0 }
+      : { pcs: row.metricValue ?? 0 }),
+  }));
+
+  const totalUnscannedMetric = data.reduce(
+    (sum, row) => sum + (showWeight ? row.weight : row.pcs),
+    0,
+  );
+
+  return {
+    stockOpnameNo: no,
+    categoryCode,
+    data,
+    totalRecords: data.length,
+    ...(showWeight
+      ? { totalUnscannedWeight: Math.round(totalUnscannedMetric * 100) / 100 }
+      : { totalUnscannedPcs: totalUnscannedMetric }),
+  };
+}
+
+// Dipakai laporan cetak — untuk label yang SUDAH discan, bandingkan lokasi
+// hasil scan (ScannedBlok/ScannedIdLokasi) dengan lokasi acuan snapshot
+// (Blok/IdLokasi). Logic mismatch-nya sama persis dengan yang dipakai
+// getStockOpnameSnapshot (isLocationMismatch) & event socket hasilInserted
+// — supaya kepala gudang tahu label mana saja yang fisiknya ditemukan di
+// lokasi berbeda dari catatan sistem, bukan cuma jumlahnya.
+async function getLocationMatchReport({ stockOpnameNo }) {
+  const pool = await poolPromise;
+  const { no, header, categoryCode, cfg } = await resolveStockOpnameCategory(
+    pool,
+    stockOpnameNo,
+  );
+
+  const scannedMatchSql = [
+    "h.NoSO = src.NoSO",
+    ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
+  ].join(" AND ");
+  const labelColumnsSql = cfg.labelColumns.map((c) => `src.${c}`).join(", ");
+
+  const res = await pool.request().input("stockOpnameNo", sql.VarChar, no)
+    .query(`
+      SELECT ${labelColumnsSql}, src.Blok AS RefBlok, src.IdLokasi AS RefIdLokasi,
+        src.${cfg.jenisColumn} AS typeId,
+        h.ScannedBlok, h.ScannedIdLokasi, h.DateTimeScan, h.Username,
+        u.FName, u.LName
+      FROM dbo.${cfg.snapshotTable} AS src
+      INNER JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
+      LEFT JOIN dbo.MstUsername AS u ON u.Username = h.Username
+      WHERE src.NoSO = @stockOpnameNo
+      ORDER BY src.Blok ASC, src.IdLokasi ASC, ${labelColumnsSql} ASC;
+    `);
+
+  const typeMaster = await getJenisByKategori(header.IdKategori);
+  const typeNameById = new Map(
+    (typeMaster?.jenis || []).map((j) => [j.IdJenis, j.NamaJenis]),
+  );
+
+  let matchCount = 0;
+  const mismatches = [];
+  for (const row of res.recordset || []) {
+    const isMismatch =
+      normBlokValue(row.ScannedBlok) !== normBlokValue(row.RefBlok) ||
+      (row.ScannedIdLokasi ?? null) !== (row.RefIdLokasi ?? null);
+
+    if (!isMismatch) {
+      matchCount += 1;
+      continue;
+    }
+
+    mismatches.push({
+      labelNo: cfg.labelColumns.map((c) => row[c]).join("-"),
+      typeName: typeNameById.get(row.typeId) ?? null,
+      referenceBlok: row.RefBlok ?? UNKNOWN_BLOK_CODE,
+      referenceLocationId: row.RefIdLokasi ?? UNKNOWN_LOCATION_ID,
+      scannedBlok: row.ScannedBlok ?? UNKNOWN_BLOK_CODE,
+      scannedLocationId: row.ScannedIdLokasi ?? UNKNOWN_LOCATION_ID,
+      username: row.Username,
+      fullName: [row.FName, row.LName].filter(Boolean).join(" ") || null,
+      scannedAt: row.DateTimeScan,
+    });
+  }
+
+  return {
+    stockOpnameNo: no,
+    categoryCode,
+    totalScanned: matchCount + mismatches.length,
+    matchCount,
+    mismatchCount: mismatches.length,
+    mismatches,
+  };
+}
+
+// Laporan PDF (Puppeteer) — merangkum data yang persis sama dengan
+// getCompleteSummary (total/per-jenis/per-blok) + getScanUserSummary
+// (per-user), ditambah daftar label yang belum discan lewat
+// getUnscannedLabels + kecocokan lokasi scan lewat getLocationMatchReport,
+// supaya laporan cetak selalu konsisten dengan yang
+// ditampilkan FE lewat dialog "Tandai Selesai" / "Ringkasan Scan".
+let soV2BrowserPromise;
+
+async function getSoV2Browser() {
+  if (!soV2BrowserPromise) {
+    soV2BrowserPromise = puppeteer.launch({
+      headless: "shell",
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+  }
+  return soV2BrowserPromise;
+}
+
+process.on("SIGINT", async () => {
+  if (soV2BrowserPromise) {
+    const b = await soV2BrowserPromise;
+    await b.close();
+    soV2BrowserPromise = null;
+  }
+});
+process.on("SIGTERM", async () => {
+  if (soV2BrowserPromise) {
+    const b = await soV2BrowserPromise;
+    await b.close();
+    soV2BrowserPromise = null;
+  }
+});
+
+async function getLaporanStockOpnameHtml({ stockOpnameNo }) {
+  // Laporan ini meringkas HASIL AKHIR (selisih & kendala lokasi) — cuma
+  // masuk akal dibaca setelah sesi ditandai selesai. Dicek di sini
+  // (bukan cuma disembunyikan tombolnya di FE) supaya endpoint tidak bisa
+  // diakses langsung selama SO masih berjalan.
+  const pool = await poolPromise;
+  const { header } = await resolveStockOpnameCategory(pool, stockOpnameNo);
+  if (!header.IsComplete) {
+    throw conflict(
+      `Stock opname ${stockOpnameNo} belum ditandai selesai — laporan hanya tersedia setelah sesi selesai.`,
+    );
+  }
+
+  const [summary, scanSummary, unscannedLabels, locationMatch] = await Promise.all([
+    getCompleteSummary({ stockOpnameNo }),
+    getScanUserSummary({ stockOpnameNo }),
+    getUnscannedLabels({ stockOpnameNo }),
+    getLocationMatchReport({ stockOpnameNo }),
+  ]);
+
+  return buildStockOpnameV2ReportHtml({
+    summary,
+    scanSummary,
+    unscannedLabels,
+    locationMatch,
+  });
+}
+
+async function getLaporanStockOpnamePdf({ stockOpnameNo }) {
+  const html = await getLaporanStockOpnameHtml({ stockOpnameNo });
+
+  const browser = await getSoV2Browser();
+  const page = await browser.newPage();
+  await page.setViewport({ width: 794, height: 1123 });
+
+  try {
+    await page.goto("about:blank", { waitUntil: "domcontentloaded" });
+    await page.evaluate((h) => {
+      document.open();
+      document.write(h);
+      document.close();
+    }, html);
+
+    return await page.pdf({
+      format: "A4",
+      landscape: false,
+      printBackground: true,
+      displayHeaderFooter: true,
+      headerTemplate: "<span></span>",
+      // "pageNumber"/"totalPages" adalah class khusus yang di-substitusi
+      // Puppeteer sendiri, bukan dari data laporan — laporan ini bisa
+      // berhalaman banyak (mis. daftar label belum discan yang panjang),
+      // jadi nomor halaman penting supaya urutan cetakan fisik tidak
+      // tertukar.
+      footerTemplate: `
+        <div style="width:100%; font-size:8px; color:#94a3b8; text-align:center; font-family:'Segoe UI',Arial,sans-serif;">
+          Halaman <span class="pageNumber"></span> dari <span class="totalPages"></span>
+        </div>`,
+      margin: { top: "8mm", right: "8mm", bottom: "14mm", left: "8mm" },
+    });
+  } finally {
+    await page.close();
+  }
+}
+
 async function deleteStockOpname({ stockOpnameNo, ctx }) {
   const no = String(stockOpnameNo || "").trim();
   if (!no) throw badReq("stockOpnameNo wajib diisi");
@@ -1993,6 +2232,10 @@ module.exports = {
   insertStockOpnameHasil,
   deleteStockOpnameHasil,
   getScanUserSummary,
+  getUnscannedLabels,
+  getLocationMatchReport,
+  getLaporanStockOpnameHtml,
+  getLaporanStockOpnamePdf,
   deleteStockOpname,
   getAllBlok,
   getLocationsInBlok,

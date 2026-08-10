@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    :root {
+      --ink: #172033;
+      --body: #3f4a5a;
+      --muted: #697386;
+      --faint: #98a2b3;
+      --line: #dfe3e8;
+      --line-soft: #edf0f3;
+      --red: #b42318;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+      font-size: 10px;
+      line-height: 1.5;
+      color: var(--body);
+      background: #fff;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
+    /* ── Letterhead ────────────────────────────────────────────────── */
+    .report-header {
+      margin-bottom: 18px;
+      padding-top: 14px;
+      padding-bottom: 13px;
+      border-top: 3px solid var(--ink);
+      border-bottom: 1px solid var(--ink);
+    }
+    .doc-title {
+      font-size: 19px;
+      line-height: 1.2;
+      font-weight: 700;
+      letter-spacing: -0.2px;
+      color: var(--ink);
+    }
+
+    .meta-table { width: 100%; margin-top: 13px; border-collapse: collapse; border: 1px solid var(--line); }
+    .meta-table th, .meta-table td { padding: 6px 9px; border: 1px solid var(--line); }
+    .meta-table th {
+      width: 17%;
+      background: var(--line-soft);
+      color: var(--muted);
+      font-size: 7.5px;
+      font-weight: 700;
+      letter-spacing: .55px;
+      text-align: left;
+      text-transform: uppercase;
+    }
+    .meta-table td { width: 33%; color: var(--ink); font-size: 10px; font-weight: 650; }
+
+    /* ── Ringkasan naratif (pengganti banner berwarna) ────────────────── */
+    .summary-note {
+      margin-bottom: 22px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--line-soft);
+      font-size: 10px;
+      color: var(--body);
+    }
+    .summary-note strong { color: var(--ink); font-weight: 750; }
+    .summary-note .tone-red { color: var(--red); }
+
+    /* ── Sections ──────────────────────────────────────────────────── */
+    .section { margin-bottom: 22px; }
+    .section-title {
+      margin-bottom: 10px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--line);
+      font-size: 11.5px;
+      line-height: 1.2;
+      font-weight: 700;
+      color: var(--ink);
+      break-after: avoid;
+    }
+
+    .tone-red { color: var(--red) !important; font-weight: 700; }
+    .tone-muted { color: var(--faint) !important; }
+
+    .callout {
+      margin-bottom: 11px;
+      padding-left: 10px;
+      border-left: 2px solid var(--line);
+      color: var(--muted);
+      font-size: 9.5px;
+    }
+    .callout strong { color: var(--ink); font-weight: 750; }
+
+    /* ── Tables (grid penuh, gaya export ERP) ─────────────────────────── */
+    table.data-table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); }
+    table.data-table thead { display: table-header-group; }
+    table.data-table tr { break-inside: avoid; }
+    table.data-table th {
+      padding: 6px 8px;
+      border: 1px solid var(--line);
+      background: var(--line-soft);
+      color: var(--muted);
+      font-size: 7.8px;
+      font-weight: 700;
+      letter-spacing: .2px;
+      text-align: left;
+      text-transform: uppercase;
+    }
+    table.data-table td {
+      padding: 6px 8px;
+      border: 1px solid var(--line);
+      color: var(--body);
+      font-size: 9px;
+      vertical-align: top;
+    }
+    table.data-table tbody tr:nth-child(even) td { background: #fbfbfc; }
+    .right { text-align: right !important; }
+    .center { text-align: center !important; }
+    .label-list {
+      color: var(--body);
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 8.2px !important;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .no-data { padding: 8px 0; color: var(--faint); font-size: 9px; font-style: italic; }
+    .note-banner { margin-top: 6px; color: var(--muted); font-size: 8px; font-style: italic; }
+
+    /* ── Footer ────────────────────────────────────────────────────── */
+    .doc-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 16px;
+      margin-top: 24px;
+      padding-top: 9px;
+      border-top: 1px solid var(--line);
+      color: var(--faint);
+      font-size: 7.5px;
+      break-inside: avoid;
+    }
+  </style>
+</head>
+<body>
+  <header class="report-header">
+    <div class="doc-title">Laporan Stock Opname</div>
+    <table class="meta-table">
+      <tbody>
+        <tr>
+          <th>Kategori</th>
+          <td>{{categoryName}}</td>
+          <th>Nomor SO</th>
+          <td>{{noso}}</td>
+        </tr>
+        <tr>
+          <th>Tanggal Mulai</th>
+          <td>{{tanggalMulai}}</td>
+          <th>Tanggal Selesai</th>
+          <td>{{tanggalSelesai}}</td>
+        </tr>
+        <tr>
+          <th>Status</th>
+          <td colspan="3">{{statusLabel}}</td>
+        </tr>
+      </tbody>
+    </table>
+  </header>
+
+  <div class="summary-note">{{verdictNote}}</div>
+
+  {{content}}
+
+  <footer class="doc-footer">
+    <span>Dicetak {{printedAt}}</span>
+  </footer>
+</body>
+</html>

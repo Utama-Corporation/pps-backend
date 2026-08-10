@@ -9,4 +9,9 @@ const ctrl = require("./master-shift-controller");
 router.get("/shift/hour", verifyToken, ctrl.getShiftHours);
 router.get("/shift/current", verifyToken, ctrl.getCurrentShift);
 
+// Khusus mixer: filter MstShiftHourSet.IdBagian = 5 (hardcode)
+// Query: ?tanggal=2026-05-09&shift=1
+router.get("/mixer/shift/hour", verifyToken, ctrl.getMixerShiftHours);
+router.get("/mixer/shift/current", verifyToken, ctrl.getMixerCurrentShift);
+
 module.exports = router;

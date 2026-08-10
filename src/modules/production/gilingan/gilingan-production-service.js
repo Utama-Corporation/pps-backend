@@ -2011,12 +2011,15 @@ async function splitProduksiTime(selector, payload, ctx) {
         ON mg.IdGilingan = o.OutputJenisId;
     `);
 
-    // Update HourEnd sumber menjadi hourStart baru
+    // Update HourEnd sumber menjadi hourStart baru + tandai selesai (IsComplete = 1)
+    // — produksi sumber digantikan oleh produksi baru hasil split, jadi tidak
+    // lagi menerima input dan otomatis dianggap complete.
     await new sql.Request(tx)
       .input("SourceNoProduksi", sql.VarChar(50), sourceNo)
       .input("NewHourStart", sql.VarChar(20), hourStart).query(`
         UPDATE dbo.GilinganProduksi_h
-        SET HourEnd = CAST(@NewHourStart AS time(7))
+        SET HourEnd = CAST(@NewHourStart AS time(7)),
+            IsComplete = 1
         WHERE NoProduksi = @SourceNoProduksi
       `);
 

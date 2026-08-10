@@ -445,6 +445,9 @@ async function getCrusherByNoProduksi({
   return result.recordset || [];
 }
 
+// Khusus gilingan: MstShiftHourSet.IdBagian di-hardcode = 11 (bagian Gilingan)
+const ID_BAGIAN_SHIFT_GILINGAN = 11;
+
 async function getGilinganByNoProduksi({
   idBagianMesin = 3,
   includeDisabled = true,
@@ -452,6 +455,7 @@ async function getGilinganByNoProduksi({
   const pool = await poolPromise;
   const request = pool.request();
   request.input("IdBagianMesin", idBagianMesin);
+  request.input("IdBagianShift", ID_BAGIAN_SHIFT_GILINGAN);
 
   const whereEnable = includeDisabled ? "1=1" : "ISNULL(m.Enable, 1) = 1";
 
@@ -467,7 +471,8 @@ async function getGilinganByNoProduksi({
         h.ValidFrmDate
       FROM dbo.MstShiftHourSet h WITH (NOLOCK)
       CROSS JOIN CurrentCtx c
-      WHERE CONVERT(date, h.ValidFrmDate) <= c.CurrentDate
+      WHERE h.IdBagian = @IdBagianShift
+        AND CONVERT(date, h.ValidFrmDate) <= c.CurrentDate
       ORDER BY CONVERT(date, h.ValidFrmDate) DESC, h.IdShiftHourSet DESC
     ),
     ActiveShift AS (
@@ -624,6 +629,9 @@ async function getGilinganByNoProduksi({
   return result.recordset || [];
 }
 
+// Khusus mixer: MstShiftHourSet.IdBagian di-hardcode = 5 (bagian Mixer)
+const ID_BAGIAN_SHIFT_MIXER = 5;
+
 async function getMixerByNoProduksi({
   idBagianMesin = 5,
   includeDisabled = true,
@@ -631,6 +639,7 @@ async function getMixerByNoProduksi({
   const pool = await poolPromise;
   const request = pool.request();
   request.input("IdBagianMesin", idBagianMesin);
+  request.input("IdBagianShift", ID_BAGIAN_SHIFT_MIXER);
 
   const whereEnable = includeDisabled ? "1=1" : "ISNULL(m.Enable, 1) = 1";
 
@@ -646,7 +655,8 @@ async function getMixerByNoProduksi({
         h.ValidFrmDate
       FROM dbo.MstShiftHourSet h WITH (NOLOCK)
       CROSS JOIN CurrentCtx c
-      WHERE CONVERT(date, h.ValidFrmDate) <= c.CurrentDate
+      WHERE h.IdBagian = @IdBagianShift
+        AND CONVERT(date, h.ValidFrmDate) <= c.CurrentDate
       ORDER BY CONVERT(date, h.ValidFrmDate) DESC, h.IdShiftHourSet DESC
     ),
     ActiveShift AS (
@@ -766,6 +776,9 @@ async function getMixerByNoProduksi({
   return result.recordset || [];
 }
 
+// Khusus inject: MstShiftHourSet.IdBagian di-hardcode = 4 (bagian Inject)
+const ID_BAGIAN_SHIFT_INJECT = 4;
+
 async function getInjectByNoProduksi({
   idBagianMesin = 4,
   includeDisabled = true,
@@ -773,6 +786,7 @@ async function getInjectByNoProduksi({
   const pool = await poolPromise;
   const request = pool.request();
   request.input("IdBagianMesin", idBagianMesin);
+  request.input("IdBagianShift", ID_BAGIAN_SHIFT_INJECT);
 
   const whereEnable = includeDisabled ? "1=1" : "ISNULL(m.Enable, 1) = 1";
 
@@ -788,7 +802,8 @@ async function getInjectByNoProduksi({
         h.ValidFrmDate
       FROM dbo.MstShiftHourSet h WITH (NOLOCK)
       CROSS JOIN CurrentCtx c
-      WHERE CONVERT(date, h.ValidFrmDate) <= c.CurrentDate
+      WHERE h.IdBagian = @IdBagianShift
+        AND CONVERT(date, h.ValidFrmDate) <= c.CurrentDate
       ORDER BY CONVERT(date, h.ValidFrmDate) DESC, h.IdShiftHourSet DESC
     ),
     ActiveShift AS (

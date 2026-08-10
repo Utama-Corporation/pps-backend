@@ -9,6 +9,11 @@ const TUTUP_TRANSAKSI_SOURCES = {
     codeColumn: "NoProduksi",
     dateColumn: "TglProduksi",
   },
+  penerimaanBahanBaku: {
+    table: "dbo.PenerimaanBahanBaku_h",
+    codeColumn: "NoPenerimaan",
+    dateColumn: "TglPenerimaan",
+  },
   brokerProduksi: {
     table: "dbo.BrokerProduksi_h",
     codeColumn: "NoProduksi",

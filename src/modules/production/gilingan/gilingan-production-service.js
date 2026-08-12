@@ -19,6 +19,11 @@ const {
   generateNextCode,
 } = require("../../../core/utils/sequence-code-helper");
 
+// MstShiftHourSet.IdBagian di-hardcode = 11 (bagian Gilingan) — samakan
+// dengan master-shift-service.js agar split-time tidak salah ambil set jam
+// shift milik bagian lain.
+const ID_BAGIAN_GILINGAN = 11;
+
 function formatTanggalPanjangIndonesia(value) {
   if (!value) return null;
 
@@ -1796,13 +1801,15 @@ async function splitProduksiTime(selector, payload, ctx) {
     // Ambil referensi jam shift dari master
     const shiftRefRes = await new sql.Request(tx)
       .input("Tanggal", sql.Date, tanggal)
-      .input("NoShift", sql.Int, srcShift).query(`
+      .input("NoShift", sql.Int, srcShift)
+      .input("IdBagian", sql.Int, ID_BAGIAN_GILINGAN).query(`
         ;WITH LatestShiftSet AS (
           SELECT TOP 1
             h.IdShiftHourSet,
             h.ValidFrmDate
           FROM dbo.MstShiftHourSet h WITH (NOLOCK)
-          WHERE CONVERT(date, h.ValidFrmDate) <= @Tanggal
+          WHERE h.IdBagian = @IdBagian
+            AND CONVERT(date, h.ValidFrmDate) <= @Tanggal
           ORDER BY CONVERT(date, h.ValidFrmDate) DESC, h.IdShiftHourSet DESC
         )
         SELECT TOP 1

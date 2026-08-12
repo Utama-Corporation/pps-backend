@@ -16,7 +16,6 @@ const {
   badReq,
   conflict,
   notFound,
-  forbidden,
 } = require("../../../core/utils/http-error");
 const {
   getFormulaInputsByCategory,
@@ -29,6 +28,11 @@ const {
 const {
   getReferencedTables,
 } = require("../../../core/config/produksi-input-mapping.config");
+
+// MstShiftHourSet.IdBagian di-hardcode = 4 (bagian Inject) — samakan dengan
+// master-shift-service.js agar split-time tidak salah ambil set jam shift
+// milik bagian lain.
+const ID_BAGIAN_INJECT = 4;
 
 function pad2(value) {
   return String(value).padStart(2, "0");
@@ -3083,8 +3087,8 @@ async function requestCompleteInjectProduksi(noProduksi, ctx) {
       throw conflict(`Produksi ${no} sudah complete.`);
     }
 
-    // SEMENTARA: bypass approval, langsung IsComplete = 1.
-    // TODO(next-dev): kembalikan ke alur PENDING begitu approval flow siap.
+    // IsComplete langsung 1 saat operator menekan "Selesaikan Produksi" —
+    // tidak ada alur approval terpisah.
     await new sql.Request(tx)
       .input("NoProduksi", sql.VarChar(50), no)
       .input("ActorId", sql.Int, actorIdNum).query(`
@@ -3111,90 +3115,6 @@ async function requestCompleteInjectProduksi(noProduksi, ctx) {
     } catch (_) {}
     throw error;
   }
-}
-
-async function approveCompleteInjectProduksi(noProduksi, ctx) {
-  const no = String(noProduksi || "").trim();
-  if (!no) throw badReq("noProduksi wajib");
-
-  const actorIdNum = requireActorId(ctx);
-  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
-  const requestId = String(ctx?.requestId || "").trim();
-
-  const pool = await poolPromise;
-  const tx = new sql.Transaction(pool);
-  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-
-  try {
-    await applyAuditContext(new sql.Request(tx), {
-      actorId: actorIdNum,
-      actorUsername,
-      requestId,
-    });
-
-    const checkRes = await new sql.Request(tx).input(
-      "NoProduksi",
-      sql.VarChar(50),
-      no,
-    ).query(`
-        SELECT TOP 1 NoProduksi, IsComplete, CompleteRequestStatus, CompleteRequestedBy
-        FROM dbo.InjectProduksi_h WITH (UPDLOCK, HOLDLOCK)
-        WHERE NoProduksi = @NoProduksi;
-      `);
-
-    if (!checkRes.recordset?.length) {
-      throw notFound(`NoProduksi tidak ditemukan: ${no}`);
-    }
-
-    const row = checkRes.recordset[0];
-    if (row.CompleteRequestStatus !== "PENDING") {
-      throw conflict(`Produksi ${no} tidak punya request approval yang pending.`);
-    }
-    if (row.CompleteRequestedBy === actorIdNum) {
-      throw forbidden("Tidak boleh approve request completion milik sendiri.");
-    }
-
-    await new sql.Request(tx)
-      .input("NoProduksi", sql.VarChar(50), no)
-      .input("ActorId", sql.Int, actorIdNum).query(`
-        UPDATE dbo.InjectProduksi_h
-        SET IsComplete = 1,
-            CompleteRequestStatus = 'APPROVED',
-            CompleteDecisionBy = @ActorId,
-            CompleteDecisionAt = SYSUTCDATETIME()
-        WHERE NoProduksi = @NoProduksi;
-      `);
-
-    await tx.commit();
-
-    return {
-      noProduksi: no,
-      isComplete: true,
-      status: "complete",
-    };
-  } catch (error) {
-    try {
-      await tx.rollback();
-    } catch (_) {}
-    throw error;
-  }
-}
-
-async function listPendingCompleteRequests() {
-  const pool = await poolPromise;
-  const result = await pool.request().query(`
-      SELECT h.NoProduksi, h.TglProduksi, h.IdMesin, ms.NamaMesin,
-             h.CompleteRequestedBy, reqUser.Username AS CompleteRequestedByUsername,
-             h.CompleteRequestedAt
-      FROM dbo.InjectProduksi_h h WITH (NOLOCK)
-      LEFT JOIN dbo.MstMesinInject ms WITH (NOLOCK)
-        ON ms.IdMesin = h.IdMesin
-      LEFT JOIN dbo.MstUsername reqUser WITH (NOLOCK)
-        ON reqUser.IdUsername = h.CompleteRequestedBy
-      WHERE h.CompleteRequestStatus = 'PENDING'
-      ORDER BY h.CompleteRequestedAt;
-    `);
-  return result.recordset;
 }
 
 async function getFormulaInputsByNoProduksi(noProduksi) {
@@ -5516,13 +5436,15 @@ async function splitProduksiTime(selector, payload, ctx) {
 
     const shiftRefRes = await new sql.Request(tx)
       .input("Tanggal", sql.Date, tanggal)
-      .input("NoShift", sql.Int, srcShift).query(`
+      .input("NoShift", sql.Int, srcShift)
+      .input("IdBagian", sql.Int, ID_BAGIAN_INJECT).query(`
         ;WITH LatestShiftSet AS (
           SELECT TOP 1
             h.IdShiftHourSet,
             h.ValidFrmDate
           FROM dbo.MstShiftHourSet h WITH (NOLOCK)
-          WHERE CONVERT(date, h.ValidFrmDate) <= @Tanggal
+          WHERE h.IdBagian = @IdBagian
+            AND CONVERT(date, h.ValidFrmDate) <= @Tanggal
           ORDER BY CONVERT(date, h.ValidFrmDate) DESC, h.IdShiftHourSet DESC
         )
         SELECT TOP 1
@@ -5773,8 +5695,8 @@ async function splitProduksiTime(selector, payload, ctx) {
         WHERE NoProduksi = @SourceNoProduksi
       `);
 
-    // Source produksi dianggap selesai saat di-split — tetap perlu approval
-    // atasan, bukan langsung IsComplete=1.
+    // Source produksi otomatis IsComplete=1 saat di-split — tidak ada alur
+    // approval terpisah.
     await requestCompleteOnTx(tx, sourceNo, actorIdNum);
 
     await new sql.Request(tx)
@@ -6038,8 +5960,6 @@ module.exports = {
   discardInjectPcsPerLabelPending,
   terminateInjectProduksi,
   requestCompleteInjectProduksi,
-  approveCompleteInjectProduksi,
-  listPendingCompleteRequests,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
   splitProduksiTime,

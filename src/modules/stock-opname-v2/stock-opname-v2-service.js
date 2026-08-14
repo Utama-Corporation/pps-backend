@@ -1885,11 +1885,9 @@ async function getScanUserSummary({ stockOpnameNo }) {
 
 // Sumber tanggal pembuatan label untuk laporan cetak — snapshot tidak
 // menyimpan tanggal, jadi diambil dari tabel produksi asli (DateCreate).
-// Kategori bahan baku (bahanbaku/bahanbakupakai) tidak punya kolom tanggal
-// (cuma TimeCreate tanpa tanggal), jadi null.
 const LABEL_DATE_SOURCE = {
-  bahanbaku: null,
-  bahanbakupakai: null,
+  bahanbaku: { table: "dbo.BahanBaku_h", keyColumn: "NoBahanBaku" },
+  bahanbakupakai: { table: "dbo.BahanBaku_h", keyColumn: "NoBahanBaku" },
   washing: { table: "dbo.Washing_h", keyColumn: "NoWashing" },
   broker: { table: "dbo.Broker_h", keyColumn: "NoBroker" },
   crusher: { table: "dbo.Crusher", keyColumn: "NoCrusher" },

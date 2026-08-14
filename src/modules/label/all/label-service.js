@@ -14,18 +14,11 @@ const KATEGORI_LABELS = {
   reject: "Reject",
 };
 
-async function getAllLabels(
-  page = 1,
-  limit = 50,
-  kategori = null,
-  idlokasi = null,
-  blok = null,
-) {
-  const pool = await poolPromise;
-  const offset = (page - 1) * limit;
-
-  // CTE semua kategori + Qty & Berat (partial-aware sesuai spesifikasi)
-  const cte = `
+// CTE semua kategori + Qty & Berat (partial-aware sesuai spesifikasi).
+// Diekstrak jadi fungsi supaya bisa dipakai ulang oleh getLabelSummaryByCode
+// tanpa duplikasi ~300 baris SQL.
+function _buildLabelsCTE() {
+  return `
 ;WITH
 A AS ( -- Bahan Baku (partial-aware)
   SELECT
@@ -328,9 +321,10 @@ BF AS ( -- Reject (header only)
   WHERE r.DateUsage IS NULL
 )
 `;
+}
 
-  // union semua kategori
-  const allUnion = `
+// union semua kategori (dipakai bareng _buildLabelsCTE())
+const _ALL_LABELS_UNION = `
   SELECT * FROM A
   UNION ALL SELECT * FROM B
   UNION ALL SELECT * FROM D
@@ -343,7 +337,45 @@ BF AS ( -- Reject (header only)
   UNION ALL SELECT * FROM BF
 `;
 
-  let filterUnion = allUnion;
+/**
+ * Ambil ringkasan 1 label (jenis, kategori, uom, qty/berat, blok, idLokasi)
+ * lewat CTE generik yang sama dipakai getAllLabels. Return null kalau label
+ * tidak ditemukan/tidak available (DateUsage sudah terisi).
+ */
+async function getLabelSummaryByCode(labelCode) {
+  const code = String(labelCode || "").trim();
+  if (!code) return null;
+
+  const pool = await poolPromise;
+  const query = `
+${_buildLabelsCTE()}
+SELECT TOP 1 LabelCode, NamaJenis, KodeKategori, Kategori, Uom, Blok, IdLokasi,
+       ISNULL(Qty,0)   AS Qty,
+       ISNULL(Berat,0) AS Berat
+FROM (${_ALL_LABELS_UNION}) AS X
+WHERE LabelCode = @LabelCode
+`;
+
+  const res = await pool
+    .request()
+    .input("LabelCode", sql.NVarChar(50), code)
+    .query(query);
+
+  return res.recordset[0] || null;
+}
+
+async function getAllLabels(
+  page = 1,
+  limit = 50,
+  kategori = null,
+  idlokasi = null,
+  blok = null,
+) {
+  const pool = await poolPromise;
+  const offset = (page - 1) * limit;
+
+  const cte = _buildLabelsCTE();
+  let filterUnion = _ALL_LABELS_UNION;
   if (kategori) {
     switch ((kategori || "").toLowerCase()) {
       case "bahanbaku":
@@ -534,57 +566,57 @@ function getAvailabilityCheckSQL(prefix, tableName) {
     case "A": // BahanBakuPallet_h + BahanBaku_d
     case "AB":
       return `
-        SELECT TOP 1 
-          p.Blok, p.IdLokasi,
-          CASE 
+        SELECT TOP 1
+          p.Blok, p.IdLokasi, p.IdWarehouse,
+          CASE
             WHEN EXISTS (
               SELECT 1 FROM dbo.BahanBaku_d d
-              WHERE d.NoBahanBaku = p.NoBahanBaku 
+              WHERE d.NoBahanBaku = p.NoBahanBaku
                 AND d.NoPallet = p.NoPallet
                 AND d.DateUsage IS NULL
-            ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) 
+            ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit)
           END AS Available
         FROM dbo.BahanBakuPallet_h p
         WHERE (CAST(p.NoBahanBaku AS NVARCHAR(50)) + '-' + CAST(p.NoPallet AS NVARCHAR(10))) = @LabelCode
       `;
     case "B": // Washing_h + Washing_d
       return `
-        SELECT TOP 1 
-          h.Blok, h.IdLokasi,
-          CASE 
+        SELECT TOP 1
+          h.Blok, h.IdLokasi, h.IdWarehouse,
+          CASE
             WHEN EXISTS (
               SELECT 1 FROM dbo.Washing_d d
               WHERE d.NoWashing = h.NoWashing
                 AND d.DateUsage IS NULL
-            ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) 
+            ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit)
           END AS Available
         FROM dbo.Washing_h h
         WHERE h.NoWashing = @LabelCode
       `;
     case "D": // Broker_h + Broker_d
       return `
-        SELECT TOP 1 
-          h.Blok, h.IdLokasi,
-          CASE 
+        SELECT TOP 1
+          h.Blok, h.IdLokasi, h.IdWarehouse,
+          CASE
             WHEN EXISTS (
               SELECT 1 FROM dbo.Broker_d d
               WHERE d.NoBroker = h.NoBroker
                 AND d.DateUsage IS NULL
-            ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) 
+            ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit)
           END AS Available
         FROM dbo.Broker_h h
         WHERE h.NoBroker = @LabelCode
       `;
     case "H": // Mixer_h + Mixer_d
       return `
-        SELECT TOP 1 
-          h.Blok, h.IdLokasi,
-          CASE 
+        SELECT TOP 1
+          h.Blok, h.IdLokasi, h.IdWarehouse,
+          CASE
             WHEN EXISTS (
               SELECT 1 FROM dbo.Mixer_d d
               WHERE d.NoMixer = h.NoMixer
                 AND d.DateUsage IS NULL
-            ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) 
+            ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit)
           END AS Available
         FROM dbo.Mixer_h h
         WHERE h.NoMixer = @LabelCode
@@ -593,54 +625,54 @@ function getAvailabilityCheckSQL(prefix, tableName) {
     // HEADER-ONLY: valid bila header.DateUsage IS NULL
     case "F": // Crusher
       return `
-        SELECT TOP 1 
-          c.Blok, c.IdLokasi,
-          CASE WHEN c.DateUsage IS NULL 
+        SELECT TOP 1
+          c.Blok, c.IdLokasi, c.IdWarehouse,
+          CASE WHEN c.DateUsage IS NULL
                THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Available
         FROM dbo.Crusher c
         WHERE c.NoCrusher = @LabelCode
       `;
     case "M": // Bonggolan
       return `
-        SELECT TOP 1 
-          b.Blok, b.IdLokasi,
-          CASE WHEN b.DateUsage IS NULL 
+        SELECT TOP 1
+          b.Blok, b.IdLokasi, b.IdWarehouse,
+          CASE WHEN b.DateUsage IS NULL
                THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Available
         FROM dbo.Bonggolan b
         WHERE b.NoBonggolan = @LabelCode
       `;
     case "V": // Gilingan (dipakai sebagai header di implementasi kamu)
       return `
-        SELECT TOP 1 
-          g.Blok, g.IdLokasi,
-          CASE WHEN g.DateUsage IS NULL 
+        SELECT TOP 1
+          g.Blok, g.IdLokasi, g.IdWarehouse,
+          CASE WHEN g.DateUsage IS NULL
                THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Available
         FROM dbo.Gilingan g
         WHERE g.NoGilingan = @LabelCode
       `;
     case "BB": // FurnitureWIP (header)
       return `
-        SELECT TOP 1 
-          fw.Blok, fw.IdLokasi,
-          CASE WHEN fw.DateUsage IS NULL 
+        SELECT TOP 1
+          fw.Blok, fw.IdLokasi, fw.IdWarehouse,
+          CASE WHEN fw.DateUsage IS NULL
                THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Available
         FROM dbo.FurnitureWIP fw
         WHERE fw.NoFurnitureWIP = @LabelCode
       `;
     case "BA": // BarangJadi (header)
       return `
-        SELECT TOP 1 
-          bj.Blok, bj.IdLokasi,
-          CASE WHEN bj.DateUsage IS NULL 
+        SELECT TOP 1
+          bj.Blok, bj.IdLokasi, bj.IdWarehouse,
+          CASE WHEN bj.DateUsage IS NULL
                THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Available
         FROM dbo.BarangJadi bj
         WHERE bj.NoBJ = @LabelCode
       `;
     case "BF": // RejectV2 (header)
       return `
-        SELECT TOP 1 
-          r.Blok, r.IdLokasi,
-          CASE WHEN r.DateUsage IS NULL 
+        SELECT TOP 1
+          r.Blok, r.IdLokasi, r.IdWarehouse,
+          CASE WHEN r.DateUsage IS NULL
                THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Available
         FROM dbo.RejectV2 r
         WHERE r.NoReject = @LabelCode
@@ -649,14 +681,30 @@ function getAvailabilityCheckSQL(prefix, tableName) {
       // fallback generic (anggap header-only punya kolom DateUsage & labelCol)
       const labelCol = getLabelColumn(prefix) || "NoLabel";
       return `
-        SELECT TOP 1 
-          h.Blok, h.IdLokasi,
-          CASE WHEN h.DateUsage IS NULL 
+        SELECT TOP 1
+          h.Blok, h.IdLokasi, h.IdWarehouse,
+          CASE WHEN h.DateUsage IS NULL
                THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Available
         FROM ${tableName} h
         WHERE ${labelCol} = @LabelCode
       `;
   }
+}
+
+// =====================
+// Helper: cek apakah label sedang berstatus IN_TRANSIT di Good Transfer
+// (dipakai untuk mengunci label agar tidak bisa di-mapping/dipakai produksi lain)
+// =====================
+async function isLabelInTransit(labelCode, runner) {
+  const pool = runner || (await poolPromise);
+  const res = await pool
+    .request()
+    .input("LabelCode", sql.NVarChar(50), labelCode).query(`
+      SELECT TOP 1 1 AS Found
+      FROM dbo.GoodTransferItem
+      WHERE LabelCode = @LabelCode AND StatusItem = 'IN_TRANSIT'
+    `);
+  return res.recordset.length > 0;
 }
 
 // =====================
@@ -759,11 +807,53 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   const beforeIdLokasi = toIntOrNull(availRes.recordset[0].IdLokasi);
   const available = !!availRes.recordset[0].Available;
 
+  // IdWarehouse dihitung dari MstBlok (relasi Blok->Warehouse yang sebenarnya),
+  // bukan dari kolom IdWarehouse pada tabel label yang bisa basi/tidak sinkron.
+  const beforeWarehouseRes = await pool
+    .request()
+    .input("Blok", sql.VarChar(100), normBlok(beforeBlok)).query(`
+      SELECT TOP 1 IdWarehouse FROM dbo.MstBlok WHERE Blok = @Blok
+    `);
+  const beforeIdWarehouse = toIntOrNull(
+    beforeWarehouseRes.recordset[0]?.IdWarehouse,
+  );
+
   if (!available) {
     return {
       success: false,
       code: "ALREADY_USED",
       message: `Label ${labelCode} sudah terpakai!`,
+    };
+  }
+
+  // ========= 1.1) GUARD: label sedang dalam proses Good Transfer =========
+  if (await isLabelInTransit(labelCode, pool)) {
+    return {
+      success: false,
+      code: "LABEL_IN_TRANSIT",
+      message: `Label ${labelCode} sedang dalam proses Good Transfer, tidak bisa di-mapping`,
+    };
+  }
+
+  // ========= 1.2) GUARD: tujuan tidak boleh lintas warehouse (harus lewat Good Transfer) =========
+  const targetWarehouseRes = await pool
+    .request()
+    .input("Blok", sql.VarChar(100), blokNorm).query(`
+      SELECT TOP 1 IdWarehouse FROM dbo.MstBlok WHERE Blok = @Blok
+    `);
+  const targetIdWarehouse = toIntOrNull(
+    targetWarehouseRes.recordset[0]?.IdWarehouse,
+  );
+
+  if (
+    targetIdWarehouse !== null &&
+    beforeIdWarehouse !== null &&
+    targetIdWarehouse !== beforeIdWarehouse
+  ) {
+    return {
+      success: false,
+      code: "CROSS_WAREHOUSE_NOT_ALLOWED",
+      message: `Pindah lintas warehouse harus melalui Good Transfer`,
     };
   }
 
@@ -1201,4 +1291,9 @@ module.exports = {
   getAllLabelsV2,
   updateLabelLocation,
   getLabelLocationHistory,
+  resolveLabelTable,
+  getLabelColumn,
+  getAvailabilityCheckSQL,
+  isLabelInTransit,
+  getLabelSummaryByCode,
 };

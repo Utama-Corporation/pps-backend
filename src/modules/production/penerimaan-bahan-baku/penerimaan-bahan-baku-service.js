@@ -9,10 +9,32 @@ const {
   toDateOnly,
 } = require("../../../core/shared/tutup-transaksi-guard");
 
-const NOBB_PREFIX_BY_KATEGORI = {
-  pakai: "A.",
-  proses: "AB.",
-};
+// Kode kategori bahan baku yang didukung modul Penerimaan Bahan Baku,
+// dan prefix label-nya di-resolve dinamis dari dbo.MstKategori (bukan
+// di-hardcode) — lihat resolveKategoriPrefix(). Berdasarkan data MstKategori
+// aktual: KodeKategori "bahanbaku" (NamaKategori "Bahan Baku", generik —
+// dipakai sebagai alur "Proses") punya PrefixLabel "A.", sedangkan
+// "bahanbakupakai" ("Bahan Baku Pakai") punya PrefixLabel "AB.".
+const SUPPORTED_KODE_KATEGORI = new Set(["bahanbaku", "bahanbakupakai"]);
+
+/// Ambil PrefixLabel dari dbo.MstKategori untuk sebuah KodeKategori.
+/// [runner] boleh berupa pool (read-only, mis. saat list) atau transaksi
+/// (mis. saat create, supaya ikut serialisasi transaksi yang sama).
+async function resolveKategoriPrefix(runner, kodeKategori) {
+  const result = await new sql.Request(runner)
+    .input("KodeKategori", sql.VarChar(50), kodeKategori)
+    .query(`
+      SELECT PrefixLabel
+      FROM dbo.MstKategori
+      WHERE KodeKategori = @KodeKategori AND ISNULL(Enable, 1) = 1
+    `);
+
+  const prefix = result.recordset[0]?.PrefixLabel;
+  if (!prefix) {
+    throw badReq(`Kategori "${kodeKategori}" tidak ditemukan atau tidak aktif di MstKategori`);
+  }
+  return prefix;
+}
 
 function normalizeSaks(saks, palletIndex) {
   if (!Array.isArray(saks) || saks.length === 0) {
@@ -89,15 +111,43 @@ function validateCreatePayload(payload) {
 
   const noPlat = payload?.noPlat ? String(payload.noPlat).trim() || null : null;
 
-  const kategori = String(payload?.kategori || "pakai").trim().toLowerCase();
-  const prefix = NOBB_PREFIX_BY_KATEGORI[kategori];
-  if (!prefix) {
-    throw badReq(`kategori tidak valid: ${payload?.kategori}. Gunakan "pakai" atau "proses"`);
+  const kodeKategori = String(payload?.kodeKategori || payload?.kategori || "")
+    .trim()
+    .toLowerCase();
+  if (!SUPPORTED_KODE_KATEGORI.has(kodeKategori)) {
+    throw badReq(
+      `kodeKategori tidak valid: ${payload?.kodeKategori}. Gunakan salah satu dari: ${[...SUPPORTED_KODE_KATEGORI].join(", ")}`,
+    );
+  }
+
+  const shift = Number(payload?.shift);
+  if (!Number.isInteger(shift) || shift <= 0) {
+    throw badReq("shift wajib diisi");
+  }
+
+  const hourStart = String(payload?.hourStart || "").trim();
+  if (!hourStart) {
+    throw badReq("hourStart wajib diisi");
+  }
+
+  const hourEnd = String(payload?.hourEnd || "").trim();
+  if (!hourEnd) {
+    throw badReq("hourEnd wajib diisi");
   }
 
   const pallets = normalizePallets(payload?.pallets);
 
-  return { tglPenerimaan, idTim, idSupplier, noPlat, kategori, prefix, pallets };
+  return {
+    tglPenerimaan,
+    idTim,
+    idSupplier,
+    noPlat,
+    kodeKategori,
+    shift,
+    hourStart,
+    hourEnd,
+    pallets,
+  };
 }
 
 async function generateUniqueCode(tx, opts) {
@@ -163,6 +213,8 @@ async function createPenerimaanBahanBaku(payload, ctx) {
 
     await assertTimAktif(tx, v.idTim);
 
+    const prefix = await resolveKategoriPrefix(tx, v.kodeKategori);
+
     const noPenerimaan = await generateUniqueCode(tx, {
       tableName: "dbo.PenerimaanBahanBaku_h",
       columnName: "NoPenerimaan",
@@ -173,7 +225,7 @@ async function createPenerimaanBahanBaku(payload, ctx) {
     const noBahanBaku = await generateUniqueCode(tx, {
       tableName: "dbo.BahanBaku_h",
       columnName: "NoBahanBaku",
-      prefix: v.prefix,
+      prefix,
       width: 10,
     });
 
@@ -185,12 +237,21 @@ async function createPenerimaanBahanBaku(payload, ctx) {
       .input("IdTim", sql.Int, v.idTim)
       .input("IdSupplier", sql.Int, v.idSupplier)
       .input("NoPlat", sql.VarChar(20), v.noPlat)
+      .input("Shift", sql.Int, v.shift)
+      .input("HourStart", sql.VarChar(20), v.hourStart)
+      .input("HourEnd", sql.VarChar(20), v.hourEnd)
       .input("CreateBy", sql.VarChar(100), actorUsername || null)
       .query(`
         INSERT INTO dbo.PenerimaanBahanBaku_h
-          (NoPenerimaan, TglPenerimaan, IdTim, IdSupplier, NoPlat, CreateBy)
+          (NoPenerimaan, TglPenerimaan, IdTim, IdSupplier, NoPlat, Shift, HourStart, HourEnd, CreateBy)
         VALUES
-          (@NoPenerimaan, @TglPenerimaan, @IdTim, @IdSupplier, @NoPlat, @CreateBy)
+          (
+            @NoPenerimaan, @TglPenerimaan, @IdTim, @IdSupplier, @NoPlat,
+            @Shift,
+            CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL ELSE CAST(@HourStart AS time(7)) END,
+            CASE WHEN @HourEnd IS NULL OR LTRIM(RTRIM(@HourEnd)) = '' THEN NULL ELSE CAST(@HourEnd AS time(7)) END,
+            @CreateBy
+          )
       `);
 
     await new sql.Request(tx)
@@ -295,7 +356,11 @@ async function createPenerimaanBahanBaku(payload, ctx) {
       idTim: v.idTim,
       idSupplier: v.idSupplier,
       noPlat: v.noPlat,
-      kategori: v.kategori,
+      shift: v.shift,
+      hourStart: v.hourStart,
+      hourEnd: v.hourEnd,
+      kodeKategori: v.kodeKategori,
+      prefix,
       noBahanBaku,
       outputs: createdOutputs,
       audit: { actorId: audit.actorId, requestId: audit.requestId },
@@ -308,14 +373,25 @@ async function createPenerimaanBahanBaku(payload, ctx) {
   }
 }
 
-async function listPenerimaanBahanBaku({ page = 1, pageSize = 20, filter = "" } = {}) {
+async function listPenerimaanBahanBaku({ page = 1, pageSize = 20, filter = "", kodeKategori = "" } = {}) {
   const pool = await poolPromise;
 
   const p = Math.max(1, Number(page) || 1);
   const ps = Math.max(1, Math.min(200, Number(pageSize) || 20));
   const offset = (p - 1) * ps;
   const filterTerm = String(filter || "").trim();
+  const kodeKategoriTerm = String(kodeKategori || "").trim().toLowerCase();
 
+  let prefixTerm = "";
+  if (kodeKategoriTerm) {
+    if (!SUPPORTED_KODE_KATEGORI.has(kodeKategoriTerm)) {
+      throw badReq(`kodeKategori tidak valid: ${kodeKategori}`);
+    }
+    prefixTerm = await resolveKategoriPrefix(pool, kodeKategoriTerm);
+  }
+
+  // NoBahanBaku 1:1 dengan NoPenerimaan (dibuat sekaligus saat create), jadi
+  // filter kategori cukup dicek lewat salah satu output-nya.
   const whereClause = `
     WHERE 1 = 1
       AND (
@@ -324,10 +400,18 @@ async function listPenerimaanBahanBaku({ page = 1, pageSize = 20, filter = "" } 
         OR ISNULL(sup.NmSupplier, '') LIKE '%' + @Filter + '%'
         OR ISNULL(t.NamaTim, '') LIKE '%' + @Filter + '%'
       )
+      AND (
+        @PrefixTerm = ''
+        OR EXISTS (
+          SELECT 1 FROM dbo.PenerimaanBahanBakuOutput po
+          WHERE po.NoPenerimaan = h.NoPenerimaan AND po.NoBahanBaku LIKE @PrefixTerm + '%'
+        )
+      )
   `;
 
   const countReq = pool.request();
   countReq.input("Filter", sql.VarChar(100), filterTerm);
+  countReq.input("PrefixTerm", sql.VarChar(20), prefixTerm);
   const countRes = await countReq.query(`
     SELECT COUNT(1) AS total
     FROM dbo.PenerimaanBahanBaku_h h WITH (NOLOCK)
@@ -340,6 +424,7 @@ async function listPenerimaanBahanBaku({ page = 1, pageSize = 20, filter = "" } 
 
   const dataReq = pool.request();
   dataReq.input("Filter", sql.VarChar(100), filterTerm);
+  dataReq.input("PrefixTerm", sql.VarChar(20), prefixTerm);
   dataReq.input("offset", sql.Int, offset);
   dataReq.input("limit", sql.Int, ps);
   const dataRes = await dataReq.query(`
@@ -351,6 +436,9 @@ async function listPenerimaanBahanBaku({ page = 1, pageSize = 20, filter = "" } 
       h.IdSupplier,
       sup.NmSupplier AS NamaSupplier,
       h.NoPlat,
+      h.Shift,
+      CONVERT(VARCHAR(8), h.HourStart, 108) AS HourStart,
+      CONVERT(VARCHAR(8), h.HourEnd, 108) AS HourEnd,
       h.CreateBy,
       h.DateTimeCreate,
       agg.NoBahanBaku,
@@ -392,6 +480,9 @@ async function getDetailPenerimaanBahanBaku(noPenerimaan) {
       h.IdSupplier,
       sup.NmSupplier AS NamaSupplier,
       h.NoPlat,
+      h.Shift,
+      CONVERT(VARCHAR(8), h.HourStart, 108) AS HourStart,
+      CONVERT(VARCHAR(8), h.HourEnd, 108) AS HourEnd,
       h.CreateBy,
       h.DateTimeCreate
     FROM dbo.PenerimaanBahanBaku_h h
@@ -507,9 +598,43 @@ async function deletePenerimaanBahanBaku(noPenerimaan, ctx) {
   }
 }
 
+// ==========================================
+//  STATUS TIM (untuk grid ala mesin washing)
+//  Analog GET /api/mst-mesin/washing: satu baris = satu tim, dengan info
+//  NoPenerimaan yang dibuat HARI INI (jika ada). Tim tanpa NoPenerimaan
+//  hari ini dianggap "belum aktif" di layar tablet.
+// ==========================================
+async function getTimStatus() {
+  const pool = await poolPromise;
+  const result = await pool.request().query(`
+    SELECT
+      t.IdTim,
+      t.NamaTim,
+      t.Aktif,
+      today.NoPenerimaan,
+      CONVERT(varchar(10), today.TglPenerimaan, 23) AS TglPenerimaan,
+      today.Shift,
+      CONVERT(VARCHAR(8), today.HourStart, 108) AS HourStart,
+      CONVERT(VARCHAR(8), today.HourEnd, 108) AS HourEnd
+    FROM dbo.MstTimPenerimaanBB t WITH (NOLOCK)
+    OUTER APPLY (
+      SELECT TOP 1
+        h.NoPenerimaan, h.TglPenerimaan, h.Shift, h.HourStart, h.HourEnd
+      FROM dbo.PenerimaanBahanBaku_h h WITH (NOLOCK)
+      WHERE h.IdTim = t.IdTim
+        AND CONVERT(date, h.TglPenerimaan) = CONVERT(date, GETDATE())
+      ORDER BY h.DateTimeCreate DESC
+    ) today
+    ORDER BY t.NamaTim ASC;
+  `);
+
+  return result.recordset || [];
+}
+
 module.exports = {
   createPenerimaanBahanBaku,
   listPenerimaanBahanBaku,
   getDetailPenerimaanBahanBaku,
   deletePenerimaanBahanBaku,
+  getTimStatus,
 };

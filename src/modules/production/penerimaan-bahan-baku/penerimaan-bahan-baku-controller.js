@@ -14,14 +14,29 @@ function buildCtx(req) {
   };
 }
 
+async function timStatus(req, res) {
+  try {
+    const data = await service.getTimStatus();
+    return res.status(200).json({
+      success: true,
+      message: "Status tim penerimaan bahan baku berhasil diambil",
+      data,
+    });
+  } catch (error) {
+    console.error("Error getting tim status PenerimaanBahanBaku:", error);
+    return res.status(500).json({ success: false, message: "Internal Server Error", error: error.message });
+  }
+}
+
 async function list(req, res) {
   const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
   const pageSizeRaw = parseInt(req.query.pageSize, 10) || 20;
   const pageSize = Math.min(Math.max(pageSizeRaw, 1), 100);
   const filter = req.query.filter ? String(req.query.filter) : "";
+  const kodeKategori = req.query.kodeKategori ? String(req.query.kodeKategori) : "";
 
   try {
-    const { data, total } = await service.listPenerimaanBahanBaku({ page, pageSize, filter });
+    const { data, total } = await service.listPenerimaanBahanBaku({ page, pageSize, filter, kodeKategori });
     return res.status(200).json({
       success: true,
       message: "Data PenerimaanBahanBaku berhasil diambil",
@@ -34,6 +49,7 @@ async function list(req, res) {
         hasNextPage: page * pageSize < total,
         hasPrevPage: page > 1,
         filter,
+        kodeKategori,
       },
     });
   } catch (error) {
@@ -93,4 +109,4 @@ async function remove(req, res) {
   }
 }
 
-module.exports = { list, getDetail, create, remove };
+module.exports = { list, getDetail, create, remove, timStatus };

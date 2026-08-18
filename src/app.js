@@ -77,7 +77,6 @@ const goodTransferRoutes = require("./modules/good-transfer/good-transfer-routes
 const masterJenisRoutes = require("./modules/master-jenis/master-jenis-routes");
 const masterKategoriRoutes = require("./modules/master-kategori/master-kategori-routes");
 const tradeInRoutes = require("./modules/trade-in/trade-in-routes");
-const penerimaanBahanBakuRoutes = require("./modules/production/penerimaan-bahan-baku/penerimaan-bahan-baku-route");
 
 const app = express();
 
@@ -172,6 +171,7 @@ app.use("/api/mst", mstSupplierRoutes);
 app.use("/api", mstPrinterRoutes);
 app.use("/api/audit", auditRoutes);
 app.use("/api/trade-in", tradeInRoutes);
+app.use("/api/retur-v3", returV3Routes);
 app.use("/api/penerimaan-bahan-baku", penerimaanBahanBakuRoutes);
 
 // ❌ Error handling

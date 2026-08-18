@@ -22,7 +22,12 @@ router.post("/:noRetur/items", requirePermission("retur:create"), ctrl.addItems)
 router.put("/:noRetur/items/:idItem", requirePermission("retur:update"), ctrl.updateItem);
 router.delete("/:noRetur/items/:idItem", requirePermission("retur:delete"), ctrl.deleteItem);
 
-router.patch("/:noRetur/decision", requirePermission("retur:update"), ctrl.decide);
+// retur:decide HANYA untuk menentukan diganti/tidak-diganti — wewenang
+// Sales. generate-label tetap retur:update (Admin), karena itu langkah
+// operasional yang beda orangnya dari yang mengambil keputusan; dipicu
+// otomatis di sisi FE begitu Admin (bukan Sales) membuka retur yang
+// statusnya sudah diputuskan, bukan lagi langsung nempel di aksi decide.
+router.patch("/:noRetur/decision", requirePermission("retur:decide"), ctrl.decide);
 
 router.post(
   "/:noRetur/items/:idItem/generate-label",

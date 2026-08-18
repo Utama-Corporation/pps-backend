@@ -16,12 +16,17 @@ exports.getAll = async (req, res) => {
     const search = (req.query.search || "").trim();
     const includeUsed =
       String(req.query.includeUsed || "").toLowerCase() === "true";
+    // Optional: filter berdasarkan prefix NoBahanBaku (mis. "A." / "AB.")
+    // — dipakai modul Penerimaan Bahan Baku untuk memisahkan tampilan per
+    // kategori (lihat dbo.MstKategori.PrefixLabel).
+    const prefix = (req.query.prefix || "").trim();
 
     const { data, total } = await bahanBakuService.getAll({
       page,
       limit,
       search,
       includeUsed,
+      prefix,
     });
     const totalPages = Math.ceil(total / limit);
 

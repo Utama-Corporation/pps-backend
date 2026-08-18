@@ -67,6 +67,8 @@ const mstPrinterRoutes = require("./modules/master/printer/master-printer-route"
 const mstReguRoutes = require("./modules/master/regu/master-regu-route");
 const mstShiftRoutes = require("./modules/master/shift/master-shift-route");
 const mstMaterialRoutes = require("./modules/master/material/master-material-route");
+const mstTimPenerimaanBBRoutes = require("./modules/master/tim-penerimaan-bb/master-tim-penerimaan-bb-route");
+const mstSupplierRoutes = require("./modules/master/supplier/master-supplier-route");
 const auditRoutes = require("./modules/audit/audit-route");
 const updateRoutes = require("./modules/update/update-routes");
 const printLockRoutes = require("./modules/label/print-lock/print-lock-routes");
@@ -74,6 +76,7 @@ const mappingRoutes = require("./modules/mapping/mapping-routes");
 const masterJenisRoutes = require("./modules/master-jenis/master-jenis-routes");
 const masterKategoriRoutes = require("./modules/master-kategori/master-kategori-routes");
 const tradeInRoutes = require("./modules/trade-in/trade-in-routes");
+const penerimaanBahanBakuRoutes = require("./modules/production/penerimaan-bahan-baku/penerimaan-bahan-baku-route");
 
 const app = express();
 
@@ -162,9 +165,12 @@ app.use("/api/mst", mstWarehouseRoutes);
 app.use("/api/mst", mstReguRoutes);
 app.use("/api/mst", mstShiftRoutes);
 app.use("/api/mst", mstMaterialRoutes);
+app.use("/api/mst", mstTimPenerimaanBBRoutes);
+app.use("/api/mst", mstSupplierRoutes);
 app.use("/api", mstPrinterRoutes);
 app.use("/api/audit", auditRoutes);
 app.use("/api/trade-in", tradeInRoutes);
+app.use("/api/penerimaan-bahan-baku", penerimaanBahanBakuRoutes);
 
 // ❌ Error handling
 app.use((err, req, res, next) => {

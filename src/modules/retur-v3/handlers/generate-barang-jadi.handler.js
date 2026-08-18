@@ -29,9 +29,9 @@ exports.generateBarangJadiLabel = async (noRetur, idItem, ctx) => {
       );
     const header = headerRes.recordset[0];
     if (!header) throw notFound(`NoRetur ${noRetur} tidak ditemukan`);
-    if (header.StatusRetur !== "TIDAK_DIGANTI") {
+    if (!["DIGANTI", "TIDAK_DIGANTI"].includes(header.StatusRetur)) {
       throw conflict(
-        "Generate label hanya bisa dilakukan saat StatusRetur=TIDAK_DIGANTI",
+        "Generate label hanya bisa dilakukan setelah keputusan PIC (DIGANTI/TIDAK_DIGANTI)",
       );
     }
 

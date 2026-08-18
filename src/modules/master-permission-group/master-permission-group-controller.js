@@ -1,6 +1,9 @@
 const {
   getList,
   getPermissionList,
+  createPermission,
+  updatePermission,
+  deletePermission,
   getDetail,
   saveNew,
   saveUpdate,
@@ -31,6 +34,54 @@ async function getPermissionListHandler(req, res) {
   } catch (err) {
     console.error("❌ master-permission-group getPermissionList:", err.message);
     return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+// =========================
+// POST /api/master-permission-group/permissions
+// =========================
+async function createPermissionHandler(req, res) {
+  try {
+    const result = await createPermission(req.body || {});
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    console.error("❌ master-permission-group createPermission:", err.message);
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message || "Internal Server Error",
+    });
+  }
+}
+
+// =========================
+// PUT /api/master-permission-group/permissions/:noPermission
+// =========================
+async function updatePermissionHandler(req, res) {
+  try {
+    const result = await updatePermission(req.params.noPermission, req.body || {});
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    console.error("❌ master-permission-group updatePermission:", err.message);
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message || "Internal Server Error",
+    });
+  }
+}
+
+// =========================
+// DELETE /api/master-permission-group/permissions/:noPermission
+// =========================
+async function deletePermissionHandler(req, res) {
+  try {
+    const result = await deletePermission(req.params.noPermission);
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    console.error("❌ master-permission-group deletePermission:", err.message);
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message || "Internal Server Error",
+    });
   }
 }
 
@@ -103,6 +154,9 @@ async function removeHandler(req, res) {
 module.exports = {
   getListHandler,
   getPermissionListHandler,
+  createPermissionHandler,
+  updatePermissionHandler,
+  deletePermissionHandler,
   getDetailHandler,
   saveNewHandler,
   saveUpdateHandler,

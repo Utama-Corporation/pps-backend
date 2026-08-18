@@ -99,6 +99,88 @@ async function getPermissionList() {
 }
 
 // =========================
+// CRUD MstPermissionList (NoPermission + Permission)
+// =========================
+function normalizePermissionBody(body) {
+  const noPermission = String(body.noPermission || "").trim();
+  const permission = String(body.permission || "").trim();
+
+  if (!noPermission) throw badReq("NoPermission harus diisi.");
+  if (!permission) throw badReq("Permission harus diisi.");
+
+  return { noPermission, permission };
+}
+
+async function createPermission(body) {
+  const v = normalizePermissionBody(body);
+  const pool = await poolPromise;
+
+  const exists = await pool.request()
+    .input("NoPermission", sql.VarChar(100), v.noPermission)
+    .query(`
+      SELECT NoPermission
+        FROM dbo.MstPermissionList
+       WHERE NoPermission = @NoPermission`);
+  if (exists.recordset.length) {
+    throw badReq(`Permission "${v.noPermission}" sudah ada.`);
+  }
+
+  await pool.request()
+    .input("NoPermission", sql.VarChar(100), v.noPermission)
+    .input("Permission", sql.VarChar(200), v.permission)
+    .query(`
+      INSERT INTO dbo.MstPermissionList (NoPermission, Permission)
+      VALUES (@NoPermission, @Permission)`);
+
+  return { noPermission: v.noPermission };
+}
+
+async function updatePermission(noPermission, body) {
+  const v = normalizePermissionBody(body);
+  const pool = await poolPromise;
+
+  const exists = await pool.request()
+    .input("NoPermission", sql.VarChar(100), noPermission)
+    .query(`
+      SELECT NoPermission
+        FROM dbo.MstPermissionList
+       WHERE NoPermission = @NoPermission`);
+  if (!exists.recordset.length) {
+    throw notFound("Permission tidak ditemukan.");
+  }
+
+  await pool.request()
+    .input("NoPermission", sql.VarChar(100), noPermission)
+    .input("Permission", sql.VarChar(200), v.permission)
+    .query(`
+      UPDATE dbo.MstPermissionList
+         SET Permission = @Permission
+       WHERE NoPermission = @NoPermission`);
+
+  return { noPermission };
+}
+
+async function deletePermission(noPermission) {
+  const pool = await poolPromise;
+
+  const exists = await pool.request()
+    .input("NoPermission", sql.VarChar(100), noPermission)
+    .query(`
+      SELECT NoPermission
+        FROM dbo.MstPermissionList
+       WHERE NoPermission = @NoPermission`);
+  if (!exists.recordset.length) {
+    throw notFound("Permission tidak ditemukan.");
+  }
+
+  await pool.request()
+    .input("NoPermission", sql.VarChar(100), noPermission)
+    .query(`DELETE FROM dbo.MstPermissionList WHERE NoPermission = @NoPermission`);
+
+  return { noPermission };
+}
+
+// =========================
 // GET DETAIL GROUP (header + permissions)
 // =========================
 async function getDetail(idUGroup) {
@@ -307,6 +389,9 @@ async function remove(idUGroup) {
 module.exports = {
   getList,
   getPermissionList,
+  createPermission,
+  updatePermission,
+  deletePermission,
   getDetail,
   saveNew,
   saveUpdate,

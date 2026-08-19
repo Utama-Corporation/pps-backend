@@ -1883,6 +1883,33 @@ async function getScanUserSummary({ stockOpnameNo }) {
   };
 }
 
+// Sumber tanggal pembuatan label untuk laporan cetak — snapshot tidak
+// menyimpan tanggal, jadi diambil dari tabel produksi asli (DateCreate).
+const LABEL_DATE_SOURCE = {
+  bahanbaku: { table: "dbo.BahanBaku_h", keyColumn: "NoBahanBaku" },
+  bahanbakupakai: { table: "dbo.BahanBaku_h", keyColumn: "NoBahanBaku" },
+  washing: { table: "dbo.Washing_h", keyColumn: "NoWashing" },
+  broker: { table: "dbo.Broker_h", keyColumn: "NoBroker" },
+  crusher: { table: "dbo.Crusher", keyColumn: "NoCrusher" },
+  bonggolan: { table: "dbo.Bonggolan", keyColumn: "NoBonggolan" },
+  gilingan: { table: "dbo.Gilingan", keyColumn: "NoGilingan" },
+  mixer: { table: "dbo.Mixer_h", keyColumn: "NoMixer" },
+  furniturewip: { table: "dbo.FurnitureWIP", keyColumn: "NoFurnitureWIP" },
+  barangjadi: { table: "dbo.BarangJadi", keyColumn: "NoBJ" },
+  reject: { table: "dbo.RejectV2", keyColumn: "NoReject" },
+};
+
+function labelDateExpr(categoryCode, labelColumn) {
+  const src = LABEL_DATE_SOURCE[categoryCode];
+  if (!src) {
+    return "CAST(NULL AS datetime) AS LabelDate";
+  }
+  return `(SELECT TOP 1 CONVERT(datetime, sdt.DateCreate)
+     FROM ${src.table} AS sdt
+    WHERE sdt.${src.keyColumn} = src.${labelColumn}
+    ORDER BY sdt.DateCreate DESC, sdt.DateTimeCreate DESC) AS LabelDate`;
+}
+
 // Dipakai laporan cetak — daftar label yang BELUM discan (src tanpa
 // pasangan di tabel hasil), supaya kepala gudang tahu persis label mana
 // saja yang masih perlu dicari, bukan cuma angka rekapnya.
@@ -1907,7 +1934,8 @@ async function getUnscannedLabels({ stockOpnameNo }) {
   const res = await pool.request().input("stockOpnameNo", sql.VarChar, no)
     .query(`
       SELECT ${labelColumnsSql}, src.Blok, src.IdLokasi, src.${cfg.jenisColumn} AS typeId,
-        src.${metricColumn} AS metricValue
+        src.${metricColumn} AS metricValue,
+        ${labelDateExpr(categoryCode, cfg.labelColumns[0])}
       FROM dbo.${cfg.snapshotTable} AS src
       LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
       WHERE src.NoSO = @stockOpnameNo AND h.${cfg.labelColumns[0]} IS NULL
@@ -1923,6 +1951,7 @@ async function getUnscannedLabels({ stockOpnameNo }) {
   // sambung dengan "-" persis seperti [SoV2LabelRow.primaryValue] di FE.
   const data = (res.recordset || []).map((row) => ({
     labelNo: cfg.labelColumns.map((c) => row[c]).join("-"),
+    labelDate: row.LabelDate ?? null,
     blok: row.Blok ?? UNKNOWN_BLOK_CODE,
     locationId: row.IdLokasi ?? UNKNOWN_LOCATION_ID,
     typeId: row.typeId,
@@ -1961,6 +1990,9 @@ async function getLocationMatchReport({ stockOpnameNo }) {
     stockOpnameNo,
   );
 
+  const showWeight = categoryCode !== "furniturewip";
+  const metricColumn = showWeight ? "Berat" : "Pcs";
+
   const scannedMatchSql = [
     "h.NoSO = src.NoSO",
     ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
@@ -1971,6 +2003,8 @@ async function getLocationMatchReport({ stockOpnameNo }) {
     .query(`
       SELECT ${labelColumnsSql}, src.Blok AS RefBlok, src.IdLokasi AS RefIdLokasi,
         src.${cfg.jenisColumn} AS typeId,
+        src.${metricColumn} AS metricValue,
+        ${labelDateExpr(categoryCode, cfg.labelColumns[0])},
         h.ScannedBlok, h.ScannedIdLokasi, h.DateTimeScan, h.Username,
         u.FName, u.LName
       FROM dbo.${cfg.snapshotTable} AS src
@@ -1999,6 +2033,7 @@ async function getLocationMatchReport({ stockOpnameNo }) {
 
     mismatches.push({
       labelNo: cfg.labelColumns.map((c) => row[c]).join("-"),
+      labelDate: row.LabelDate ?? null,
       typeName: typeNameById.get(row.typeId) ?? null,
       referenceBlok: row.RefBlok ?? UNKNOWN_BLOK_CODE,
       referenceLocationId: row.RefIdLokasi ?? UNKNOWN_LOCATION_ID,
@@ -2007,6 +2042,9 @@ async function getLocationMatchReport({ stockOpnameNo }) {
       username: row.Username,
       fullName: [row.FName, row.LName].filter(Boolean).join(" ") || null,
       scannedAt: row.DateTimeScan,
+      ...(showWeight
+        ? { weight: row.metricValue ?? 0 }
+        : { pcs: row.metricValue ?? 0 }),
     });
   }
 

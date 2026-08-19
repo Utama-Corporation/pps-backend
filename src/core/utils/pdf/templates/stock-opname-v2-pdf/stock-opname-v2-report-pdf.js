@@ -173,40 +173,34 @@ function buildUnscannedLabelsSection(unscannedLabels, unit, unscannedMetric, tot
     ? allRows.slice(0, MAX_UNSCANNED_LABELS_PRINTED)
     : allRows;
 
-  // Kelompokkan per lokasi + jenis supaya nomor label yang serumpun tidak
-  // memakan satu baris tabel sendiri-sendiri — tabel bisa meledak ratusan
-  // baris kalau satu lokasi belum tersentuh sama sekali.
-  const groups = new Map();
-  for (const row of rows) {
-    const isUnknownBlok = row.blok === "TIDAK_DIKETAHUI";
-    const groupLokasiLabel = isUnknownBlok
-      ? "Tidak diketahui"
-      : lokasiLabel(row.blok, row.locationId);
-    const key = `${row.blok}||${row.locationId}||${row.typeId ?? ""}`;
-    if (!groups.has(key)) {
-      groups.set(key, {
-        lokasiLabel: groupLokasiLabel,
-        typeName: row.typeName ?? `Jenis #${row.typeId ?? "-"}`,
-        labels: [],
-      });
-    }
-    groups.get(key).labels.push(row.labelNo);
-  }
-
-  const body = Array.from(groups.values())
-    .map(
-      (g) => `
+  // Daftar per-label (tanggal & berat ikut ditampilkan), bukan dikelompokkan
+  // per lokasi — tanggal/berat tiap label berbeda sehingga pengelompokan
+  // hanya akan menyembunyikan data yang dibutuhkan.
+  const body = rows
+    .map((row) => {
+      const isUnknownBlok = row.blok === "TIDAK_DIKETAHUI";
+      const rowLokasiLabel = isUnknownBlok
+        ? "Tidak diketahui"
+        : lokasiLabel(row.blok, row.locationId);
+      return `
         <tr>
-          <td class="center">${escapeHtml(g.lokasiLabel)}</td>
-          <td>${escapeHtml(g.typeName)}</td>
-          <td class="center tone-red">${formatNumber(g.labels.length, 0)}</td>
-          <td class="label-list">${g.labels.map(escapeHtml).join(", ")}</td>
-        </tr>`,
-    )
+          <td class="label-list">${escapeHtml(row.labelNo)}${
+            row.labelDate
+              ? `<div class="tone-muted" style="font-size:7px;">${escapeHtml(formatDate(row.labelDate))}</div>`
+              : ""
+          }</td>
+          <td>${escapeHtml(row.typeName ?? `Jenis #${row.typeId ?? "-"}`)}</td>
+          <td class="center">${escapeHtml(rowLokasiLabel)}</td>
+          <td class="right">${formatNumber(
+            unit === "pcs" ? (row.pcs ?? 0) : (row.weight ?? 0),
+            unit === "pcs" ? 0 : 2,
+          )}</td>
+        </tr>`;
+    })
     .join("");
 
   const table = dataTable(
-    `<th class="center">Lokasi</th><th>Jenis</th><th class="center">Jml</th><th>No. Label</th>`,
+    `<th>No. Label</th><th>Jenis</th><th class="center">Lokasi</th><th class="right">${unit === "pcs" ? "Pcs" : "Berat"}</th>`,
     body,
   );
 
@@ -228,7 +222,7 @@ function buildUnscannedLabelsSection(unscannedLabels, unit, unscannedMetric, tot
 // tabel, cuma rinciannya yang dipotong.
 const MAX_MISMATCH_ROWS_PRINTED = 300;
 
-function buildLocationMatchSection(locationMatch) {
+function buildLocationMatchSection(locationMatch, unit) {
   const matchCount = locationMatch?.matchCount ?? 0;
   const allMismatches = locationMatch?.mismatches || [];
 
@@ -254,18 +248,26 @@ function buildLocationMatchSection(locationMatch) {
     .map(
       (m) => `
         <tr>
-          <td class="label-list">${escapeHtml(m.labelNo)}</td>
+          <td class="label-list">${escapeHtml(m.labelNo)}${
+            m.labelDate
+              ? `<div class="tone-muted" style="font-size:7px;">${escapeHtml(formatDate(m.labelDate))}</div>`
+              : ""
+          }</td>
           <td>${escapeHtml(m.typeName ?? "-")}</td>
           <td class="center">${escapeHtml(lokasiLabel(m.referenceBlok, m.referenceLocationId))}</td>
           <td class="center tone-red">${escapeHtml(lokasiLabel(m.scannedBlok, m.scannedLocationId))}</td>
           <td>${escapeHtml(m.fullName || m.username || "-")}</td>
           <td class="center">${escapeHtml(formatDateTime(m.scannedAt))}</td>
+          <td class="right">${formatNumber(
+            unit === "pcs" ? (m.pcs ?? 0) : (m.weight ?? 0),
+            unit === "pcs" ? 0 : 2,
+          )}</td>
         </tr>`,
     )
     .join("");
 
   const table = dataTable(
-    `<th>No. Label</th><th>Jenis</th><th class="center">Lokasi Tercatat</th><th class="center">Lokasi Discan</th><th>User</th><th class="center">Waktu Scan</th>`,
+    `<th>No. Label</th><th>Jenis</th><th class="center">Lokasi Tercatat</th><th class="center">Lokasi Discan</th><th>User</th><th class="center">Waktu Scan</th><th class="right">${unit === "pcs" ? "Pcs" : "Berat"}</th>`,
     body,
   );
 
@@ -400,7 +402,7 @@ function buildStockOpnameV2ReportHtml({
   const content = [
     buildSummarySection(summary, unit, scannedMetric, unscannedMetric),
     buildUnscannedLabelsSection(unscannedLabels, unit, unscannedMetric, summary.total),
-    buildLocationMatchSection(locationMatch),
+    buildLocationMatchSection(locationMatch, unit),
     buildJenisSection(summary.perJenis, unit),
     buildBlokSection(summary.perBlok, unit),
     buildScanUserSection(scanSummary, unit),

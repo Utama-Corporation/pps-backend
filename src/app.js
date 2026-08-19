@@ -74,6 +74,7 @@ const mappingRoutes = require("./modules/mapping/mapping-routes");
 const masterJenisRoutes = require("./modules/master-jenis/master-jenis-routes");
 const masterKategoriRoutes = require("./modules/master-kategori/master-kategori-routes");
 const tradeInRoutes = require("./modules/trade-in/trade-in-routes");
+const masterPermissionGroupRoutes = require("./modules/master-permission-group/master-permission-group-routes");
 
 const app = express();
 
@@ -165,6 +166,7 @@ app.use("/api/mst", mstMaterialRoutes);
 app.use("/api", mstPrinterRoutes);
 app.use("/api/audit", auditRoutes);
 app.use("/api/trade-in", tradeInRoutes);
+app.use("/api/master-permission-group", masterPermissionGroupRoutes);
 
 // ❌ Error handling
 app.use((err, req, res, next) => {

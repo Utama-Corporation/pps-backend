@@ -135,7 +135,12 @@ async function deleteItem(req, res) {
 async function decide(req, res) {
   if (!requireActor(req, res)) return;
   try {
-    const data = await service.decide(req.params.noRetur, (req.body || {}).decision, makeCtx(req));
+    const data = await service.decide(
+      req.params.noRetur,
+      (req.body || {}).decision,
+      req.body || {},
+      makeCtx(req),
+    );
     return res.status(200).json({ success: true, message: "Keputusan retur v3 berhasil disimpan", data });
   } catch (e) {
     return handleError(res, e);
@@ -229,6 +234,20 @@ async function flagKirim(req, res) {
   }
 }
 
+async function exportGsu(req, res) {
+  if (!requireActor(req, res)) return;
+  try {
+    const data = await service.exportToGsu(
+      req.params.noRetur,
+      req.body || {},
+      makeCtx(req),
+    );
+    return res.status(200).json({ success: true, message: "Ekspor ke AS_GSU berhasil", data });
+  } catch (e) {
+    return handleError(res, e);
+  }
+}
+
 module.exports = {
   getAll,
   getDetail,
@@ -246,4 +265,5 @@ module.exports = {
   undoScan,
   getTurnover,
   flagKirim,
+  exportGsu,
 };

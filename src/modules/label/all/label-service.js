@@ -1133,9 +1133,24 @@ async function getAllLabelsV2(
         FROM [dbo].[${tbl}] p
         JOIN [dbo].[BahanBaku_h] h ON h.NoBahanBaku = p.NoBahanBaku
         LEFT JOIN (
-          SELECT NoBahanBaku, NoPallet, COUNT(*) AS TotalPcs, SUM(ISNULL(Berat, 0)) AS TotalBerat
-          FROM [dbo].[BahanBaku_d] WHERE DateUsage IS NULL
-          GROUP BY NoBahanBaku, NoPallet
+          SELECT
+              d.NoBahanBaku, d.NoPallet,
+              COUNT(*) AS TotalPcs,
+              SUM(
+                CASE WHEN d.IsPartial = 1
+                  THEN CASE WHEN ISNULL(d.Berat,0)-ISNULL(bp.TotalPartial,0) < 0 THEN 0
+                       ELSE ISNULL(d.Berat,0)-ISNULL(bp.TotalPartial,0) END
+                  ELSE ISNULL(d.Berat,0)
+                END
+              ) AS TotalBerat
+          FROM [dbo].[BahanBaku_d] d
+          LEFT JOIN (
+            SELECT NoBahanBaku, NoPallet, NoSak, SUM(ISNULL(Berat,0)) AS TotalPartial
+            FROM [dbo].[BahanBakuPartial]
+            GROUP BY NoBahanBaku, NoPallet, NoSak
+          ) bp ON bp.NoBahanBaku = d.NoBahanBaku AND bp.NoPallet = d.NoPallet AND bp.NoSak = d.NoSak
+          WHERE d.DateUsage IS NULL
+          GROUP BY d.NoBahanBaku, d.NoPallet
         ) bbAgg ON bbAgg.NoBahanBaku = p.NoBahanBaku AND bbAgg.NoPallet = p.NoPallet${j.join}
         WHERE EXISTS (SELECT 1 FROM [dbo].[BahanBaku_d] d WHERE d.NoBahanBaku = p.NoBahanBaku AND d.NoPallet = p.NoPallet AND d.DateUsage IS NULL)`;
     } else if (["washing", "broker", "mixer"].includes(kode)) {
@@ -1143,6 +1158,27 @@ async function getAllLabelsV2(
       const detailTblSafe = escapeId(detailTbl);
       if (!detailTblSafe) continue;
       const j = jenisJoin("h");
+      // Broker & Mixer punya tabel partial (sak pecahan); Washing tidak.
+      const hasPartialTable = ["broker", "mixer"].includes(kode);
+      const partialTbl = escapeId(tbl.replace(/_h$/, "") + "Partial");
+      const beratExpr =
+        hasPartialTable && partialTbl
+          ? `SUM(
+               CASE WHEN d.IsPartial = 1
+                 THEN CASE WHEN ISNULL(d.Berat,0)-ISNULL(pp.TotalPartial,0) < 0 THEN 0
+                      ELSE ISNULL(d.Berat,0)-ISNULL(pp.TotalPartial,0) END
+                 ELSE ISNULL(d.Berat,0)
+               END
+             )`
+          : `SUM(ISNULL(d.Berat, 0))`;
+      const partialJoin =
+        hasPartialTable && partialTbl
+          ? `LEFT JOIN (
+               SELECT ${colNo}, NoSak, SUM(ISNULL(Berat,0)) AS TotalPartial
+               FROM [dbo].[${partialTbl}]
+               GROUP BY ${colNo}, NoSak
+             ) pp ON pp.${colNo} = d.${colNo} AND pp.NoSak = d.NoSak`
+          : "";
       sub = `
         SELECT
           h.${colNo} AS LabelCode,
@@ -1154,9 +1190,11 @@ async function getAllLabelsV2(
           ISNULL(agg.TotalBerat, 0) AS Berat${j.select}
         FROM [dbo].[${tbl}] h
         LEFT JOIN (
-          SELECT ${colNo}, COUNT(*) AS TotalPcs, SUM(ISNULL(Berat, 0)) AS TotalBerat
-          FROM [dbo].[${detailTblSafe}] WHERE DateUsage IS NULL
-          GROUP BY ${colNo}
+          SELECT d.${colNo}, COUNT(*) AS TotalPcs, ${beratExpr} AS TotalBerat
+          FROM [dbo].[${detailTblSafe}] d
+          ${partialJoin}
+          WHERE d.DateUsage IS NULL
+          GROUP BY d.${colNo}
         ) agg ON agg.${colNo} = h.${colNo}${j.join}
         WHERE EXISTS (SELECT 1 FROM [dbo].[${detailTblSafe}] d WHERE d.${colNo} = h.${colNo} AND d.DateUsage IS NULL)`;
     } else if (kode === "gilingan") {
@@ -1172,13 +1210,28 @@ async function getAllLabelsV2(
           ISNULL(agg.TotalBerat, 0) AS Berat${j.select}
         FROM [dbo].[${tbl}] h
         LEFT JOIN (
-          SELECT ${colNo}, COUNT(*) AS TotalPcs, SUM(ISNULL(Berat, 0)) AS TotalBerat
-          FROM [dbo].[${tbl}] WHERE DateUsage IS NULL
-          GROUP BY ${colNo}
+          SELECT
+              d.${colNo}, COUNT(*) AS TotalPcs,
+              SUM(
+                CASE WHEN d.IsPartial = 1
+                  THEN CASE WHEN ISNULL(d.Berat,0)-ISNULL(gp.TotalPartial,0) < 0 THEN 0
+                       ELSE ISNULL(d.Berat,0)-ISNULL(gp.TotalPartial,0) END
+                  ELSE ISNULL(d.Berat,0)
+                END
+              ) AS TotalBerat
+          FROM [dbo].[${tbl}] d
+          LEFT JOIN (
+            SELECT ${colNo}, SUM(ISNULL(Berat,0)) AS TotalPartial
+            FROM [dbo].[GilinganPartial]
+            GROUP BY ${colNo}
+          ) gp ON gp.${colNo} = d.${colNo}
+          WHERE d.DateUsage IS NULL
+          GROUP BY d.${colNo}
         ) agg ON agg.${colNo} = h.${colNo}${j.join}
         WHERE h.DateUsage IS NULL`;
     } else if (["furniturewip", "barangjadi"].includes(kode)) {
       const j = jenisJoin("h");
+      const partialTbl = kode === "furniturewip" ? "FurnitureWIPPartial" : "BarangJadiPartial";
       sub = `
         SELECT
           h.${colNo} AS LabelCode,
@@ -1190,11 +1243,44 @@ async function getAllLabelsV2(
           0 AS Berat${j.select}
         FROM [dbo].[${tbl}] h
         LEFT JOIN (
-          SELECT ${colNo}, SUM(ISNULL(Pcs, 0)) AS TotalPcs
-          FROM [dbo].[${tbl}] WHERE DateUsage IS NULL
-          GROUP BY ${colNo}
+          SELECT
+              d.${colNo},
+              SUM(
+                CASE WHEN d.IsPartial = 1
+                  THEN CASE WHEN ISNULL(d.Pcs,0)-ISNULL(pp.TotalPartialPcs,0) < 0 THEN 0
+                       ELSE ISNULL(d.Pcs,0)-ISNULL(pp.TotalPartialPcs,0) END
+                  ELSE ISNULL(d.Pcs,0)
+                END
+              ) AS TotalPcs
+          FROM [dbo].[${tbl}] d
+          LEFT JOIN (
+            SELECT ${colNo}, SUM(ISNULL(Pcs,0)) AS TotalPartialPcs
+            FROM [dbo].[${partialTbl}]
+            GROUP BY ${colNo}
+          ) pp ON pp.${colNo} = d.${colNo}
+          WHERE d.DateUsage IS NULL
+          GROUP BY d.${colNo}
         ) agg ON agg.${colNo} = h.${colNo}${j.join}
         WHERE h.DateUsage IS NULL`;
+    } else if (kode === "reject") {
+      const j = jenisJoin("t");
+      sub = `
+        SELECT
+          t.${colNo} AS LabelCode,
+          t.DateCreate, t.Blok AS Blok, t.IdLokasi AS IdLokasi,
+          CAST(N'${q(prefix)}' AS NVARCHAR(10)) AS Prefix,
+          CAST(N'${q(kat.NamaKategori)}' AS NVARCHAR(100)) AS Kategori,
+          CAST(N'${q(kat.NamaUOM)}' AS NVARCHAR(10)) AS NamaUOM,
+          0 AS Qty,
+          CASE WHEN ISNULL(t.Berat,0)-ISNULL(rp.TotalPartialBerat,0) < 0 THEN 0
+               ELSE ISNULL(t.Berat,0)-ISNULL(rp.TotalPartialBerat,0) END AS Berat${j.select}
+        FROM [dbo].[${tbl}] t
+        LEFT JOIN (
+          SELECT ${colNo}, SUM(ISNULL(Berat,0)) AS TotalPartialBerat
+          FROM [dbo].[RejectV2Partial]
+          GROUP BY ${colNo}
+        ) rp ON rp.${colNo} = t.${colNo}${j.join}
+        WHERE t.DateUsage IS NULL`;
     } else {
       const j = jenisJoin("t");
       sub = `

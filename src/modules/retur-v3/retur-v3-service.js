@@ -712,10 +712,165 @@ exports.deleteItem = async (noRetur, idItem, ctx) => {
 };
 
 // ---------------------------------------------------------------------------
+// EXPORT KE AS_GSU (AR_SalesReturnTransit + AR_SalesReturnTransitDetails)
+// Dipanggil otomatis saat keputusan sales disimpan (decide), atau manual via
+// POST /:noRetur/export-gsu. Idempotent-guard: jika NoRetur sudah pernah
+// diekspor (Remarks = NoRetur di AR_SalesReturnTransit), proses ditolak.
+// ---------------------------------------------------------------------------
+const GSU_TRANSIT_DB = "AS_GSU_TEST5.dbo";
+
+async function exportToGsuInTx(tx, noRetur, actorUsername, remarks = []) {
+  const remarksByItem = new Map();
+  if (Array.isArray(remarks)) {
+    for (const r of remarks) {
+      if (r && Number(r.idItem) > 0) {
+        remarksByItem.set(Number(r.idItem), String(r.remark || "").trim());
+      }
+    }
+  }
+
+  // 0) Duplikat check — sudah pernah diekspor ke AS_GSU?
+  const dup = await new sql.Request(tx)
+    .input("No", sql.VarChar(50), noRetur).query(`
+      SELECT 1
+      FROM ${GSU_TRANSIT_DB}.AR_SalesReturnTransit WITH (UPDLOCK, HOLDLOCK)
+      WHERE CAST(Remarks AS nvarchar(50)) = @No
+    `);
+  if (dup.recordset.length > 0) {
+    throw conflict(`Retur ${noRetur} sudah pernah diekspor ke AS_GSU. Tidak boleh diproses lagi.`);
+  }
+
+  // 1) Data retur (mengikuti query yang diberikan user)
+  const dataRes = await new sql.Request(tx)
+    .input("No", sql.VarChar(50), noRetur).query(`
+      SELECT
+        A.NoRetur,
+        A.Tanggal,
+        F.CustomerID,
+        F.CustomerName,
+        G.ItemID,
+        G.ItemName,
+        B.IdItem,
+        B.Pcs,
+        ${GSU_TRANSIT_DB}.UDF_Common_GetSmallestUOMLevel(
+          G.UOMID1, G.UOMID2, G.UOMID3, G.UOMID4
+        ) AS UOMLevel
+      FROM dbo.BJReturV3_h A
+      LEFT JOIN dbo.BJReturV3Item_d B ON B.NoRetur = A.NoRetur
+      LEFT JOIN dbo.MstKategori C ON C.KodeKategori = B.KodeKategori
+      LEFT JOIN dbo.MstCabinetWIP D ON D.IdCabinetWIP = B.IdJenis
+      LEFT JOIN dbo.MstPembeli E ON E.IdPembeli = A.IdPembeli
+      LEFT JOIN ${GSU_TRANSIT_DB}.AR_Customers F ON F.CustomerCode = E.CustomerCode
+      INNER JOIN ${GSU_TRANSIT_DB}.IC_Items G ON G.ItemCode = D.ItemCode
+      WHERE A.NoRetur = @No
+    `);
+  const rows = dataRes.recordset || [];
+  if (rows.length === 0) {
+    return { exported: false, reason: "NO_DATA", message: "Tidak ada item yang cocok untuk diekspor ke AS_GSU." };
+  }
+
+  const customerId = rows[0].CustomerID;
+  const tanggal = rows[0].Tanggal;
+
+  // 2) Nomor urut TransitCounter per bulan (reset dari 1 tiap bulan)
+  //    Prefix TransitNumber = SRT/MM/YY/ -> MAX per bulan retur tsb.
+  const dt = new Date(tanggal);
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const yy = String(dt.getFullYear()).slice(-2);
+  const prefix = `SRT/${mm}/${yy}/`;
+
+  const seq = await new sql.Request(tx)
+    .input("Prefix", sql.VarChar(10), prefix).query(`
+      SELECT ISNULL(MAX(TransitCounter), 0) AS MaxCounter
+      FROM ${GSU_TRANSIT_DB}.AR_SalesReturnTransit WITH (UPDLOCK, HOLDLOCK)
+      WHERE TransitNumber LIKE @Prefix + '%'
+    `);
+  const counter = Number(seq.recordset[0].MaxCounter) + 1;
+
+  // 3) TransitNumber = SRT/MM/YY/CCC (CCC 3 digit = TransitCounter bulan ini)
+  const ccc = String(counter).padStart(3, "0");
+  const transitNumber = `${prefix}${ccc}`;
+
+  // 4) Insert header (TransitID identity auto; ambil lewat OUTPUT INSERTED)
+  const headerIns = await new sql.Request(tx)
+    .input("TransitNumber", sql.VarChar(50), transitNumber)
+    .input("TransitDate", sql.Date, tanggal)
+    .input("CustomerID", sql.Int, customerId)
+    .input("Remarks", sql.VarChar(50), noRetur)
+    .input("CreatedBy", sql.VarChar(50), "PPS")
+    .input("ModifiedBy", sql.VarChar(50), "PPS")
+    .input("TransitType", sql.VarChar(20), "SR")
+    .input("TransitCounter", sql.Int, counter).query(`
+      INSERT INTO ${GSU_TRANSIT_DB}.AR_SalesReturnTransit (
+        TransitNumber, TransitDate, RegionID, CustomerID, Remarks,
+        Void, Posted, CreatedBy, CreatedDate, ModifiedBy, ModifiedDate,
+        WarehouseID, TransitType, TransitCounter, VoidDateTime, VoidBy, VoidReason
+      ) OUTPUT INSERTED.TransitID
+      VALUES (
+        @TransitNumber, @TransitDate, 0, @CustomerID, @Remarks,
+        0, 0, @CreatedBy, GETDATE(), @ModifiedBy, GETDATE(),
+        0, @TransitType, @TransitCounter, NULL, NULL, NULL
+      )
+    `);
+  const transitId = Number(headerIns.recordset[0].TransitID);
+
+  // 5) Insert detail (TransitID = header; TransitDetailID identity auto)
+  for (const row of rows) {
+    const remark = remarksByItem.get(Number(row.IdItem)) ?? "";
+    await new sql.Request(tx)
+      .input("TransitID", sql.Int, transitId)
+      .input("ItemID", sql.Int, Number(row.ItemID))
+      .input("Quantity", sql.Int, Number(row.Pcs))
+      .input("UOMLevel", sql.Int, Number(row.UOMLevel))
+      .input("Remark", sql.NVarChar(500), remark).query(`
+        INSERT INTO ${GSU_TRANSIT_DB}.AR_SalesReturnTransitDetails (
+          TransitID, SourceInvoiceID, SourceInvoiceDetailID,
+          ItemID, Quantity, UOMLevel, WarehouseID, Remarks,
+          ImportedReturnID, ImportedReturnDetailID
+        ) VALUES (
+          @TransitID, 0, 0,
+          @ItemID, @Quantity, @UOMLevel, 4, @Remark,
+          0, 0
+        )
+      `);
+  }
+
+  return {
+    exported: true,
+    transitID: transitId,
+    transitNumber,
+    transitCounter: counter,
+    transitDetailCount: rows.length,
+  };
+}
+
+// Endpoint mandiri: POST /api/retur-v3/:noRetur/export-gsu
+exports.exportToGsu = async (noRetur, body = {}, ctx) => {
+  const no = String(noRetur || "").trim();
+  if (!no) throw badReq("noRetur wajib diisi");
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  const { actorUsername } = ctx;
+
+  try {
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+    const result = await exportToGsuInTx(tx, no, actorUsername, body.remarks);
+    await tx.commit();
+    return { noRetur: no, ...result };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
+};
+
+// ---------------------------------------------------------------------------
 // DECISION
 // ---------------------------------------------------------------------------
 
-exports.decide = async (noRetur, decision, ctx) => {
+exports.decide = async (noRetur, decision, body = {}, ctx) => {
   const no = String(noRetur || "").trim();
   if (!no) throw badReq("noRetur wajib diisi");
   if (!["DIGANTI", "TIDAK_DIGANTI"].includes(decision)) {
@@ -758,8 +913,17 @@ exports.decide = async (noRetur, decision, ctx) => {
         WHERE NoRetur=@No
       `);
 
+    // Otomatis ekspor ke AS_GSU saat keputusan disimpan.
+    // Jika retur ini sudah pernah diekspor, akan conflict (rollback).
+    const exportResult = await exportToGsuInTx(tx, no, actorUsername, body.remarks);
+
     await tx.commit();
-    return { noRetur: no, statusRetur: decision, audit: { actorId, requestId } };
+    return {
+      noRetur: no,
+      statusRetur: decision,
+      export: exportResult,
+      audit: { actorId, requestId },
+    };
   } catch (e) {
     try {
       await tx.rollback();

@@ -1303,3 +1303,112 @@ exports.getByNoBJ = async (NoBJ) => {
   };
 };
 
+// Label partial (BL.xxxxxxxxxx) tidak punya konteks produksi sendiri —
+// Mesin/Shift/Nama/CreateBy/Berat semuanya diwariskan dari label induk,
+// cuma Pcs & HasBeenPrinted yang murni milik baris partial itu sendiri.
+exports.getByNoBJPartial = async (noBJPartial) => {
+  const pool = await poolPromise;
+  const result = await pool
+    .request()
+    .input("Code", sql.VarChar(50), noBJPartial).query(`
+      SELECT NoBJPartial, NoBJ, Pcs,
+             ISNULL(CAST(HasBeenPrinted AS int), 0) AS HasBeenPrinted
+      FROM dbo.BarangJadiPartial
+      WHERE NoBJPartial = @Code
+    `);
+
+  const partial = result.recordset?.[0];
+  if (!partial) {
+    const e = new Error(`Label partial ${noBJPartial} tidak ditemukan`);
+    e.statusCode = 404;
+    throw e;
+  }
+
+  const parent = await exports.getByNoBJ(partial.NoBJ);
+
+  return {
+    NoBJ: partial.NoBJPartial,
+    NoBJAsal: partial.NoBJ,
+    DateCreate: parent.DateCreate,
+    NamaBJ: parent.NamaBJ,
+    IdBJType: parent.IdBJType,
+    Pcs: partial.Pcs,
+    Berat: parent.Berat,
+    HasBeenPrinted: partial.HasBeenPrinted,
+    CreateBy: parent.CreateBy,
+    Mesin: parent.Mesin,
+    Shift: parent.Shift,
+  };
+};
+
+exports.incrementPartialHasBeenPrinted = async (payload) => {
+  const code = String(payload?.NoBJPartial || "").trim();
+  if (!code) throw badReq("NoBJPartial wajib diisi");
+
+  const actorIdNum = Number(payload?.actorId);
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  if (!actorId) {
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
+  }
+
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+
+  try {
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+    await new sql.Request(tx)
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
+    const rs = await new sql.Request(tx).input("Code", sql.VarChar(50), code)
+      .query(`
+        DECLARE @out TABLE (
+          NoBJPartial varchar(50),
+          HasBeenPrinted int
+        );
+
+        UPDATE dbo.BarangJadiPartial
+        SET HasBeenPrinted = ISNULL(HasBeenPrinted, 0) + 1
+        OUTPUT
+          INSERTED.NoBJPartial,
+          INSERTED.HasBeenPrinted
+        INTO @out
+        WHERE NoBJPartial = @Code;
+
+        SELECT NoBJPartial, HasBeenPrinted
+        FROM @out;
+      `);
+
+    const row = rs.recordset?.[0] || null;
+    if (!row) {
+      const e = new Error(`Label partial ${code} tidak ditemukan`);
+      e.statusCode = 404;
+      throw e;
+    }
+
+    await tx.commit();
+
+    return {
+      NoBJPartial: row.NoBJPartial,
+      HasBeenPrinted: row.HasBeenPrinted,
+    };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
+};
+

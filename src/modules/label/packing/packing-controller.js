@@ -312,6 +312,101 @@ exports.generatePdf = async (req, res) => {
   }
 };
 
+// GET /labels/packing/partial/:noBJPartial/pdf
+exports.generatePartialPdf = async (req, res) => {
+  try {
+    const code = String(req.params.noBJPartial || "").trim();
+    if (!code) {
+      return res
+        .status(400)
+        .json({ success: false, message: "noBJPartial wajib diisi" });
+    }
+
+    const row = await service.getByNoBJPartial(code);
+
+    const d = new Date(row.DateCreate);
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yy = String(d.getFullYear()).slice(-2);
+    const printed = row.HasBeenPrinted || 0;
+    const kodeLabel = printed > 0 ? `BJ${mm}${yy}CY${printed}` : `BJ${mm}${yy}`;
+
+    const namaProduk =
+      row.IdBJType !== 6 && row.Pcs != null
+        ? `${row.NamaBJ} - ${row.Pcs} pcs`
+        : row.NamaBJ;
+
+    const data = {
+      noLabel: row.NoBJ,
+      namaProduk,
+      kode: row.Mesin || "-",
+      berat: row.Berat != null ? `${Number(row.Berat).toFixed(2)} kg` : "-",
+      pcs: row.Pcs != null ? String(row.Pcs) : "-",
+      tanggal: kodeLabel,
+      createBy: row.CreateBy || "-",
+      watermarkText: "",
+    };
+
+    const pdfBuffer = await generateLabelPdf(data, buildPackingLabelHtml);
+
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `inline; filename="label-${code}.pdf"`,
+      "Content-Length": pdfBuffer.length,
+    });
+
+    return res.end(pdfBuffer);
+  } catch (err) {
+    console.error("Packing Partial PDF Error:", err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, message: err.message });
+  }
+};
+
+exports.incrementPartialHasBeenPrinted = async (req, res) => {
+  const code = String(req.params.noBJPartial || "").trim();
+
+  try {
+    if (!code) {
+      return res
+        .status(400)
+        .json({ success: false, message: "noBJPartial wajib diisi" });
+    }
+
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Unauthorized (idUsername missing)" });
+    }
+
+    const result = await service.incrementPartialHasBeenPrinted({
+      NoBJPartial: code,
+      actorId,
+      requestId: makeRequestId(req),
+    });
+
+    const io = getIo();
+    if (io)
+      io.emit("print_confirmed", {
+        noLabel: code,
+        hasBeenPrinted: result.HasBeenPrinted,
+      });
+
+    return res.status(200).json({
+      success: true,
+      message: "HasBeenPrinted berhasil ditambah",
+      data: result,
+    });
+  } catch (err) {
+    console.error("Increment Packing Partial HasBeenPrinted Error:", err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({
+      success: false,
+      message: err.message || "Terjadi kesalahan server",
+    });
+  }
+};
+
 exports.incrementHasBeenPrinted = async (req, res) => {
   const { nobj, noBJ } = req.params;
 

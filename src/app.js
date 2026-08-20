@@ -54,6 +54,7 @@ const productionSpannerRoutes = require("./modules/production/spanner/spanner-pr
 const productionReturnRoutes = require("./modules/production/return/return-production-routes");
 const returV3Routes = require("./modules/retur-v3/retur-v3-routes");
 const penerimaanBahanBakuRoutes = require("./modules/production/penerimaan-bahan-baku/penerimaan-bahan-baku-route");
+const penerimaanBahanPendukungRoutes = require("./modules/production/penerimaan-bahan-pendukung/penerimaan-bahan-pendukung-route");
 const furnitureWipTypeRoutes = require("./modules/master-furniture-wip/furniture-wip-type-routes");
 const labelPackingRoutes = require("./modules/label/packing/packing-routes");
 const productionPackingRoutes = require("./modules/production/packing/packing-production-routes");
@@ -63,6 +64,7 @@ const rejectTypeRoutes = require("./modules/master-reject/reject-master-route");
 const productionSortirRejectRoutes = require("./modules/production/sortir-reject/sortir-reject-route");
 const productionSharedRoutes = require("./modules/production/shared/production-shared-routes");
 const bjJualRoutes = require("./modules/bj-jual/bj-jual-route");
+const penjualanRoutes = require("./modules/penjualan/penjualan-route");
 const mstPembeliRoutes = require("./modules/master/pembeli/master-pembeli-route");
 const mstWarehouseRoutes = require("./modules/master/warehouse/master-warehouse-route");
 const mstPrinterRoutes = require("./modules/master/printer/master-printer-route");
@@ -163,6 +165,7 @@ app.use("/api/reject-type", rejectTypeRoutes);
 app.use("/api/production", productionSortirRejectRoutes);
 app.use("/api/production", productionSharedRoutes);
 app.use("/api/bj-jual", bjJualRoutes);
+app.use("/api/penjualan", penjualanRoutes);
 app.use("/api/mst", mstPembeliRoutes);
 app.use("/api/mst", mstWarehouseRoutes);
 app.use("/api/mst", mstReguRoutes);
@@ -175,6 +178,7 @@ app.use("/api/audit", auditRoutes);
 app.use("/api/trade-in", tradeInRoutes);
 app.use("/api/retur-v3", returV3Routes);
 app.use("/api/penerimaan-bahan-baku", penerimaanBahanBakuRoutes);
+app.use("/api/penerimaan-bahan-pendukung", penerimaanBahanPendukungRoutes);
 
 // ❌ Error handling
 app.use((err, req, res, next) => {

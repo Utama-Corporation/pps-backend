@@ -3,16 +3,16 @@ GO
 SET QUOTED_IDENTIFIER ON;
 GO
 
-/* ===== [dbo].[tr_Audit_PenerimaanBahanBaku_h] ON [dbo].[PenerimaanBahanBaku_h] ===== */
+/* ===== [dbo].[tr_Audit_PenerimaanBahanPendukung_h] ON [dbo].[PenerimaanBahanPendukung_h] ===== */
 -- =============================================
--- TRIGGER: tr_Audit_PenerimaanBahanBaku_h
+-- TRIGGER: tr_Audit_PenerimaanBahanPendukung_h
 -- AFTER INSERT, UPDATE, DELETE
 -- Actor: SESSION_CONTEXT('actor_id') fallback SESSION_CONTEXT('actor') fallback SUSER_SNAME()
 -- RequestId: SESSION_CONTEXT('request_id')
 -- PK: {"NoPenerimaan":"..."}
 -- =============================================
-CREATE OR ALTER TRIGGER [dbo].[tr_Audit_PenerimaanBahanBaku_h]
-ON [dbo].[PenerimaanBahanBaku_h]
+CREATE OR ALTER TRIGGER [dbo].[tr_Audit_PenerimaanBahanPendukung_h]
+ON [dbo].[PenerimaanBahanPendukung_h]
 AFTER INSERT, UPDATE, DELETE
 AS
 BEGIN
@@ -35,7 +35,7 @@ BEGIN
         (Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
         'INSERT',
-        'PenerimaanBahanBaku_h',
+        'PenerimaanBahanPendukung_h',
         @actor,
         @rid,
         CONCAT('{"NoPenerimaan":"', i.NoPenerimaan, '"}'),
@@ -63,7 +63,7 @@ BEGIN
         (Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
         'UPDATE',
-        'PenerimaanBahanBaku_h',
+        'PenerimaanBahanPendukung_h',
         @actor,
         @rid,
         CONCAT('{"NoPenerimaan":"', i.NoPenerimaan, '"}'),
@@ -101,7 +101,7 @@ BEGIN
         (Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
         'DELETE',
-        'PenerimaanBahanBaku_h',
+        'PenerimaanBahanPendukung_h',
         @actor,
         @rid,
         CONCAT('{"NoPenerimaan":"', d.NoPenerimaan, '"}'),

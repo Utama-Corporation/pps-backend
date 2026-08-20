@@ -1,5 +1,5 @@
-// penerimaan-bahan-baku-controller.js
-const service = require("./penerimaan-bahan-baku-service");
+// penerimaan-bahan-pendukung-controller.js
+const service = require("./penerimaan-bahan-pendukung-service");
 const {
   getActorId,
   getActorUsername,
@@ -19,11 +19,11 @@ async function timStatus(req, res) {
     const data = await service.getTimStatus();
     return res.status(200).json({
       success: true,
-      message: "Status tim penerimaan bahan baku berhasil diambil",
+      message: "Status tim penerimaan bahan pendukung berhasil diambil",
       data,
     });
   } catch (error) {
-    console.error("Error getting tim status PenerimaanBahanBaku:", error);
+    console.error("Error getting tim status PenerimaanBahanPendukung:", error);
     return res.status(500).json({ success: false, message: "Internal Server Error", error: error.message });
   }
 }
@@ -33,13 +33,12 @@ async function list(req, res) {
   const pageSizeRaw = parseInt(req.query.pageSize, 10) || 20;
   const pageSize = Math.min(Math.max(pageSizeRaw, 1), 100);
   const filter = req.query.filter ? String(req.query.filter) : "";
-  const kodeKategori = req.query.kodeKategori ? String(req.query.kodeKategori) : "";
 
   try {
-    const { data, total } = await service.listPenerimaanBahanBaku({ page, pageSize, filter, kodeKategori });
+    const { data, total } = await service.listPenerimaanBahanPendukung({ page, pageSize, filter });
     return res.status(200).json({
       success: true,
-      message: "Data PenerimaanBahanBaku berhasil diambil",
+      message: "Data PenerimaanBahanPendukung berhasil diambil",
       totalData: total,
       data,
       meta: {
@@ -49,24 +48,23 @@ async function list(req, res) {
         hasNextPage: page * pageSize < total,
         hasPrevPage: page > 1,
         filter,
-        kodeKategori,
       },
     });
   } catch (error) {
-    console.error("Error listing PenerimaanBahanBaku:", error);
+    console.error("Error listing PenerimaanBahanPendukung:", error);
     return res.status(500).json({ success: false, message: "Internal Server Error", error: error.message });
   }
 }
 
 async function getDetail(req, res) {
   try {
-    const data = await service.getDetailPenerimaanBahanBaku(req.params.noPenerimaan);
+    const data = await service.getDetailPenerimaanBahanPendukung(req.params.noPenerimaan);
     if (!data) {
-      return res.status(404).json({ success: false, message: "Data PenerimaanBahanBaku tidak ditemukan" });
+      return res.status(404).json({ success: false, message: "Data PenerimaanBahanPendukung tidak ditemukan" });
     }
-    return res.status(200).json({ success: true, message: "Data PenerimaanBahanBaku berhasil diambil", data });
+    return res.status(200).json({ success: true, message: "Data PenerimaanBahanPendukung berhasil diambil", data });
   } catch (error) {
-    console.error("Error get detail PenerimaanBahanBaku:", error);
+    console.error("Error get detail PenerimaanBahanPendukung:", error);
     return res.status(500).json({ success: false, message: "Internal Server Error", error: error.message });
   }
 }
@@ -74,16 +72,16 @@ async function getDetail(req, res) {
 async function createHeader(req, res) {
   const ctx = buildCtx(req);
   try {
-    const data = await service.createHeaderPenerimaanBahanBaku(req.body || {}, ctx);
+    const data = await service.createHeaderPenerimaanBahanPendukung(req.body || {}, ctx);
     return res.status(201).json({
       success: true,
-      message: "Header penerimaan bahan baku berhasil dibuat",
+      message: "Header penerimaan bahan pendukung berhasil dibuat",
       data,
       meta: { audit: ctx },
     });
   } catch (error) {
     const statusCode = error.statusCode || 500;
-    console.error("Error creating PenerimaanBahanBaku header:", error);
+    console.error("Error creating PenerimaanBahanPendukung header:", error);
     return res.status(statusCode).json({
       success: false,
       message: statusCode === 500 ? "Internal Server Error" : error.message,
@@ -93,19 +91,19 @@ async function createHeader(req, res) {
   }
 }
 
-async function addPallets(req, res) {
+async function addItems(req, res) {
   const ctx = buildCtx(req);
   try {
-    const data = await service.addPalletsPenerimaanBahanBaku(req.params.noPenerimaan, req.body || {}, ctx);
+    const data = await service.addItemsPenerimaanBahanPendukung(req.params.noPenerimaan, req.body || {}, ctx);
     return res.status(201).json({
       success: true,
-      message: "Pallet penerimaan bahan baku berhasil disimpan",
+      message: "Barang penerimaan bahan pendukung berhasil disimpan",
       data,
       meta: { audit: ctx },
     });
   } catch (error) {
     const statusCode = error.statusCode || 500;
-    console.error("Error adding pallets to PenerimaanBahanBaku:", error);
+    console.error("Error adding items to PenerimaanBahanPendukung:", error);
     return res.status(statusCode).json({
       success: false,
       message: statusCode === 500 ? "Internal Server Error" : error.message,
@@ -118,11 +116,11 @@ async function addPallets(req, res) {
 async function remove(req, res) {
   const ctx = buildCtx(req);
   try {
-    await service.deletePenerimaanBahanBaku(req.params.noPenerimaan, ctx);
-    return res.status(200).json({ success: true, message: "Penerimaan bahan baku berhasil dihapus" });
+    await service.deletePenerimaanBahanPendukung(req.params.noPenerimaan, ctx);
+    return res.status(200).json({ success: true, message: "Penerimaan bahan pendukung berhasil dihapus" });
   } catch (error) {
     const statusCode = error.statusCode || 500;
-    console.error("Error deleting PenerimaanBahanBaku:", error);
+    console.error("Error deleting PenerimaanBahanPendukung:", error);
     return res.status(statusCode).json({
       success: false,
       message: statusCode === 500 ? "Internal Server Error" : error.message,
@@ -131,4 +129,4 @@ async function remove(req, res) {
   }
 }
 
-module.exports = { list, getDetail, createHeader, addPallets, remove, timStatus };
+module.exports = { list, getDetail, createHeader, addItems, remove, timStatus };

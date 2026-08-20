@@ -57,4 +57,18 @@ router.get(
   ctrl.generatePdf,
 );
 
+// Label partial (BC.xxxxxxxxxx) — dipecah dari label induk lewat modul lain
+// (mis. Penjualan) saat pcs label melebihi kebutuhan.
+router.get(
+  "/labels/furniture-wip/partial/:noFurnitureWipPartial/pdf",
+  requirePermission("label_furniturewip:read"),
+  ctrl.generatePartialPdf,
+);
+
+router.patch(
+  "/labels/furniture-wip/partial/:noFurnitureWipPartial/print",
+  requirePermission("label_furniturewip:update"),
+  ctrl.incrementPartialHasBeenPrinted,
+);
+
 module.exports = router;

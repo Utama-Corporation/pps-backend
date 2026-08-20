@@ -69,6 +69,11 @@ const TUTUP_TRANSAKSI_SOURCES = {
     codeColumn: "NoRetur",
     dateColumn: "Tanggal",
   },
+  returnV3: {
+    table: "dbo.BJReturV3_h",
+    codeColumn: "NoRetur",
+    dateColumn: "Tanggal",
+  },
   // tambah lainnya...
 };
 

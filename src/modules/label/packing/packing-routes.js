@@ -61,18 +61,4 @@ router.get(
   ctrl.generatePdf,
 );
 
-// Label partial (BL.xxxxxxxxxx) — dipecah dari label induk lewat modul lain
-// (mis. Penjualan) saat pcs label melebihi kebutuhan.
-router.get(
-  "/labels/packing/partial/:noBJPartial/pdf",
-  requirePermission("label_barangjadi:read"),
-  ctrl.generatePartialPdf,
-);
-
-router.patch(
-  "/labels/packing/partial/:noBJPartial/print",
-  requirePermission("label_barangjadi:update"),
-  ctrl.incrementPartialHasBeenPrinted,
-);
-
 module.exports = router;

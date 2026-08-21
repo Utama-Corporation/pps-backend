@@ -101,14 +101,6 @@ exports.generateBarangJadiLabel = async (noRetur, idItem, ctx) => {
       `);
 
     await new sql.Request(tx)
-      .input("NoRetur", sql.VarChar(50), noRetur)
-      .input("NoBJ", sql.VarChar(50), newNoBJ)
-      .input("IdItem", sql.Int, idItem).query(`
-        INSERT INTO dbo.BJReturV3OutputLabelBarangJadi (NoRetur, NoBJ, IdItem)
-        VALUES (@NoRetur, @NoBJ, @IdItem)
-      `);
-
-    await new sql.Request(tx)
       .input("Id", sql.Int, idItem)
       .input("Code", sql.VarChar(50), newNoBJ)
       .query(

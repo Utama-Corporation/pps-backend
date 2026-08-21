@@ -155,19 +155,3 @@ exports.incrementHasBeenPrinted = async (tx, noFurnitureWip) => {
   `);
   return rs.recordset?.[0] || null;
 };
-
-exports.incrementPartialHasBeenPrinted = async (tx, noFurnitureWipPartial) => {
-  const rs = await new sql.Request(tx).input(
-    "Code",
-    sql.VarChar(50),
-    noFurnitureWipPartial,
-  ).query(`
-    DECLARE @out TABLE (NoFurnitureWIPPartial varchar(50), HasBeenPrinted int);
-    UPDATE dbo.FurnitureWIPPartial
-    SET HasBeenPrinted = ISNULL(HasBeenPrinted, 0) + 1
-    OUTPUT INSERTED.NoFurnitureWIPPartial, INSERTED.HasBeenPrinted INTO @out
-    WHERE NoFurnitureWIPPartial = @Code;
-    SELECT NoFurnitureWIPPartial, HasBeenPrinted FROM @out;
-  `);
-  return rs.recordset?.[0] || null;
-};

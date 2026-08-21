@@ -3,16 +3,16 @@ GO
 SET QUOTED_IDENTIFIER ON;
 GO
 
-/* ===== [dbo].[tr_Audit_BJReturV3Turnover_d] ON [dbo].[BJReturV3Turnover_d] ===== */
+/* ===== [dbo].[tr_Audit_BJReturV3TurnoverTarget_d] ON [dbo].[BJReturV3TurnoverTarget_d] ===== */
 -- =============================================
--- TRIGGER: tr_Audit_BJReturV3Turnover_d
+-- TRIGGER: tr_Audit_BJReturV3TurnoverTarget_d
 -- AFTER INSERT, UPDATE, DELETE
 -- Actor: SESSION_CONTEXT('actor_id') fallback SESSION_CONTEXT('actor') fallback SUSER_SNAME()
 -- RequestId: SESSION_CONTEXT('request_id')
--- PK: {"IdTurnover":...}
+-- PK: {"IdTarget":...}
 -- =============================================
-CREATE OR ALTER TRIGGER [dbo].[tr_Audit_BJReturV3Turnover_d]
-ON [dbo].[BJReturV3Turnover_d]
+CREATE OR ALTER TRIGGER [dbo].[tr_Audit_BJReturV3TurnoverTarget_d]
+ON [dbo].[BJReturV3TurnoverTarget_d]
 AFTER INSERT, UPDATE, DELETE
 AS
 BEGIN
@@ -34,24 +34,24 @@ BEGIN
     INSERT dbo.AuditTrail (Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
         'INSERT',
-        'BJReturV3Turnover_d',
+        'BJReturV3TurnoverTarget_d',
         @actor,
         @rid,
-        CONCAT('{"IdTurnover":', i.IdTurnover, '}'),
+        CONCAT('{"IdTarget":', i.IdTarget, '}'),
         NULL,
         (
             SELECT
-                i.IdTurnover,
-                i.NoRetur,
                 i.IdTarget,
-                i.LabelCode,
-                i.Pcs,
-                i.ScanBy
+                i.NoRetur,
+                i.IdItem,
+                i.KodeKategori,
+                i.IdJenis,
+                i.Pcs
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         )
     FROM inserted i
-    LEFT JOIN deleted d ON d.IdTurnover = i.IdTurnover
-    WHERE d.IdTurnover IS NULL;
+    LEFT JOIN deleted d ON d.IdTarget = i.IdTarget
+    WHERE d.IdTarget IS NULL;
 
     /* =====================
        UPDATE
@@ -59,32 +59,32 @@ BEGIN
     INSERT dbo.AuditTrail (Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
         'UPDATE',
-        'BJReturV3Turnover_d',
+        'BJReturV3TurnoverTarget_d',
         @actor,
         @rid,
-        CONCAT('{"IdTurnover":', i.IdTurnover, '}'),
+        CONCAT('{"IdTarget":', i.IdTarget, '}'),
         (
             SELECT
-                d.IdTurnover,
-                d.NoRetur,
                 d.IdTarget,
-                d.LabelCode,
-                d.Pcs,
-                d.ScanBy
+                d.NoRetur,
+                d.IdItem,
+                d.KodeKategori,
+                d.IdJenis,
+                d.Pcs
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         ),
         (
             SELECT
-                i.IdTurnover,
-                i.NoRetur,
                 i.IdTarget,
-                i.LabelCode,
-                i.Pcs,
-                i.ScanBy
+                i.NoRetur,
+                i.IdItem,
+                i.KodeKategori,
+                i.IdJenis,
+                i.Pcs
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         )
     FROM inserted i
-    JOIN deleted d ON d.IdTurnover = i.IdTurnover;
+    JOIN deleted d ON d.IdTarget = i.IdTarget;
 
     /* =====================
        DELETE
@@ -92,23 +92,23 @@ BEGIN
     INSERT dbo.AuditTrail (Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
         'DELETE',
-        'BJReturV3Turnover_d',
+        'BJReturV3TurnoverTarget_d',
         @actor,
         @rid,
-        CONCAT('{"IdTurnover":', d.IdTurnover, '}'),
+        CONCAT('{"IdTarget":', d.IdTarget, '}'),
         (
             SELECT
-                d.IdTurnover,
-                d.NoRetur,
                 d.IdTarget,
-                d.LabelCode,
-                d.Pcs,
-                d.ScanBy
+                d.NoRetur,
+                d.IdItem,
+                d.KodeKategori,
+                d.IdJenis,
+                d.Pcs
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         ),
         NULL
     FROM deleted d
-    LEFT JOIN inserted i ON i.IdTurnover = d.IdTurnover
-    WHERE i.IdTurnover IS NULL;
+    LEFT JOIN inserted i ON i.IdTarget = d.IdTarget
+    WHERE i.IdTarget IS NULL;
 END;
 GO

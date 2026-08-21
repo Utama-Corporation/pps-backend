@@ -171,16 +171,46 @@ async function getOutputs(req, res) {
   }
 }
 
-async function scan(req, res) {
+async function addTurnoverTargets(req, res) {
   if (!requireActor(req, res)) return;
   try {
-    const data = await service.scanTurnover(
+    const targets = (req.body || {}).targets;
+    const data = await service.addTurnoverTargets(
       req.params.noRetur,
       req.params.idItem,
-      (req.body || {}).labelCode,
+      targets,
       makeCtx(req),
     );
-    return res.status(201).json({ success: true, message: "Scan turnover berhasil", data });
+    return res.status(201).json({ success: true, message: "Target pengganti berhasil ditambahkan", data });
+  } catch (e) {
+    return handleError(res, e);
+  }
+}
+
+async function updateTurnoverTarget(req, res) {
+  if (!requireActor(req, res)) return;
+  try {
+    const data = await service.updateTurnoverTarget(
+      req.params.noRetur,
+      req.params.idTarget,
+      req.body || {},
+      makeCtx(req),
+    );
+    return res.status(200).json({ success: true, message: "Target pengganti berhasil diupdate", data });
+  } catch (e) {
+    return handleError(res, e);
+  }
+}
+
+async function deleteTurnoverTarget(req, res) {
+  if (!requireActor(req, res)) return;
+  try {
+    const data = await service.deleteTurnoverTarget(
+      req.params.noRetur,
+      req.params.idTarget,
+      makeCtx(req),
+    );
+    return res.status(200).json({ success: true, message: "Target pengganti berhasil dihapus", data });
   } catch (e) {
     return handleError(res, e);
   }
@@ -205,7 +235,6 @@ async function undoScan(req, res) {
   try {
     const data = await service.undoScan(
       req.params.noRetur,
-      req.params.idItem,
       req.params.idTurnover,
       makeCtx(req),
     );
@@ -224,11 +253,11 @@ async function getTurnover(req, res) {
   }
 }
 
-async function flagKirim(req, res) {
+async function complete(req, res) {
   if (!requireActor(req, res)) return;
   try {
-    const data = await service.flagKirim(req.params.noRetur, makeCtx(req));
-    return res.status(200).json({ success: true, message: "Retur v3 berhasil di-flag kirim", data });
+    const data = await service.markComplete(req.params.noRetur, makeCtx(req));
+    return res.status(200).json({ success: true, message: "Retur v3 berhasil ditandai selesai", data });
   } catch (e) {
     return handleError(res, e);
   }
@@ -260,10 +289,12 @@ module.exports = {
   decide,
   generateLabel,
   getOutputs,
-  scan,
+  addTurnoverTargets,
+  updateTurnoverTarget,
+  deleteTurnoverTarget,
   scanAuto,
   undoScan,
   getTurnover,
-  flagKirim,
+  complete,
   exportGsu,
 };

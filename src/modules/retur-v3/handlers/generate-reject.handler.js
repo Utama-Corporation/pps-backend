@@ -114,14 +114,6 @@ exports.generateRejectLabel = async (noRetur, idItem, body, ctx) => {
       `);
 
     await new sql.Request(tx)
-      .input("NoRetur", sql.VarChar(50), noRetur)
-      .input("NoReject", sql.VarChar(50), newNoReject)
-      .input("IdItem", sql.Int, idItem).query(`
-        INSERT INTO dbo.BJReturV3OutputLabelReject (NoRetur, NoReject, IdItem)
-        VALUES (@NoRetur, @NoReject, @IdItem)
-      `);
-
-    await new sql.Request(tx)
       .input("Id", sql.Int, idItem)
       .input("Code", sql.VarChar(50), newNoReject)
       .input("Berat", sql.Decimal(18, 3), berat)

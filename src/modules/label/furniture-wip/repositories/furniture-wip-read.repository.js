@@ -318,16 +318,3 @@ exports.getByNoFurnitureWip = async (noFurnitureWip) => {
     `);
   return result.recordset?.[0] || null;
 };
-
-exports.getPartialRow = async (noFurnitureWipPartial) => {
-  const pool = await poolPromise;
-  const result = await pool
-    .request()
-    .input("Code", sql.VarChar(50), noFurnitureWipPartial).query(`
-      SELECT NoFurnitureWIPPartial, NoFurnitureWIP, Pcs,
-             ISNULL(CAST(HasBeenPrinted AS int), 0) AS HasBeenPrinted
-      FROM dbo.FurnitureWIPPartial
-      WHERE NoFurnitureWIPPartial = @Code
-    `);
-  return result.recordset?.[0] || null;
-};

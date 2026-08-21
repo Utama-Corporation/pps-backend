@@ -104,14 +104,6 @@ exports.generateFurnitureWipLabel = async (noRetur, idItem, ctx) => {
       `);
 
     await new sql.Request(tx)
-      .input("NoRetur", sql.VarChar(50), noRetur)
-      .input("NoFurnitureWIP", sql.VarChar(50), newNoFurnitureWIP)
-      .input("IdItem", sql.Int, idItem).query(`
-        INSERT INTO dbo.BJReturV3OutputLabelFurnitureWIP (NoRetur, NoFurnitureWIP, IdItem)
-        VALUES (@NoRetur, @NoFurnitureWIP, @IdItem)
-      `);
-
-    await new sql.Request(tx)
       .input("Id", sql.Int, idItem)
       .input("Code", sql.VarChar(50), newNoFurnitureWIP)
       .query(

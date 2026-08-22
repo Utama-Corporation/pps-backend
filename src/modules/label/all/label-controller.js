@@ -56,6 +56,8 @@ const UPDATE_LOKASI_ERROR_STATUS = {
   LOKASI_NOT_ALLOWED: 422,
   CONFIG_ERROR: 422,
   UPDATE_FAILED: 409,
+  CROSS_WAREHOUSE_NOT_ALLOWED: 422,
+  LABEL_IN_TRANSIT: 409,
 };
 
 // 🟢 Handler baru: Update lokasi berdasarkan NomorLabel

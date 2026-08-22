@@ -76,11 +76,12 @@ function noData(message) {
   return `<div class="no-data">${escapeHtml(message)}</div>`;
 }
 
-function dataTable(theadHtml, tbodyHtml) {
+function dataTable(theadHtml, tbodyHtml, tfootHtml = "") {
   return `
     <table class="data-table">
       <thead><tr>${theadHtml}</tr></thead>
       <tbody>${tbodyHtml}</tbody>
+      ${tfootHtml ? `<tfoot>${tfootHtml}</tfoot>` : ""}
     </table>`;
 }
 
@@ -117,17 +118,17 @@ function buildSummarySection(summary, unit, scannedMetric, unscannedMetric) {
 
   const rows = `
     <tr>
-      <td>Tercatat</td>
+      <td>Tercatat (semua label)</td>
       <td class="right">${formatNumber(total.labelCount, 0)}</td>
       <td class="right">${formatNumber(totalMetric, fractionDigits)} ${unitLabel}</td>
     </tr>
     <tr>
-      <td>Ditemukan</td>
+      <td>Ditemukan / terscan</td>
       <td class="right">${formatNumber(total.scannedCount, 0)}</td>
       <td class="right">${formatNumber(scannedMetric, fractionDigits)} ${unitLabel}</td>
     </tr>
     <tr>
-      <td>Tidak Ditemukan</td>
+      <td>Belum ditemukan (Label Belum Ditemukan)</td>
       <td class="right tone-red">${formatNumber(total.unscannedCount, 0)}</td>
       <td class="right tone-red">${formatNumber(unscannedMetric, fractionDigits)} ${unitLabel}</td>
     </tr>`;
@@ -168,14 +169,12 @@ function buildUnscannedLabelsSection(unscannedLabels, unit, unscannedMetric, tot
     `<strong>${formatNumber(unscannedCount, 0)} dari ${formatNumber(labelCount, 0)} label (${missingPct}%)</strong> tidak ditemukan saat opname, setara dengan <strong>${formatNumber(unscannedMetric, unit === "pcs" ? 0 : 2)} ${unitLabel}</strong>.`,
   );
 
-  const truncated = allRows.length > MAX_UNSCANNED_LABELS_PRINTED;
-  const rows = truncated
-    ? allRows.slice(0, MAX_UNSCANNED_LABELS_PRINTED)
-    : allRows;
+  // Batasi baris tercetak agar PDF ringan, tapi totals tetap bisa
+  // direkonsiliasi: tampilkan subtotal baris tercetak + grand total semua.
+  const MAX_PRINTED = Math.min(MAX_UNSCANNED_LABELS_PRINTED, 500);
+  const truncated = allRows.length > MAX_PRINTED;
+  const rows = truncated ? allRows.slice(0, MAX_PRINTED) : allRows;
 
-  // Daftar per-label (tanggal & berat ikut ditampilkan), bukan dikelompokkan
-  // per lokasi — tanggal/berat tiap label berbeda sehingga pengelompokan
-  // hanya akan menyembunyikan data yang dibutuhkan.
   const body = rows
     .map((row) => {
       const isUnknownBlok = row.blok === "TIDAK_DIKETAHUI";
@@ -199,13 +198,28 @@ function buildUnscannedLabelsSection(unscannedLabels, unit, unscannedMetric, tot
     })
     .join("");
 
+  const metricOf = (r) => (unit === "pcs" ? r.pcs ?? 0 : r.weight ?? 0);
+  const digits = unit === "pcs" ? 0 : 2;
+  const printedMetric = rows.reduce((s, r) => s + metricOf(r), 0);
+  const totalRowsMetric = allRows.reduce((s, r) => s + metricOf(r), 0);
+
   const table = dataTable(
     `<th>No. Label</th><th>Jenis</th><th class="center">Lokasi</th><th class="right">${unit === "pcs" ? "Pcs" : "Berat"}</th>`,
     body,
+    `<tfoot>
+      ${truncated ? `<tr>
+        <td colspan="3" class="center">Subtotal (${formatNumber(rows.length, 0)} label tercetak)</td>
+        <td class="right">${formatNumber(printedMetric, digits)}</td>
+      </tr>` : ""}
+      <tr>
+        <td colspan="3" class="center"><strong>TOTAL SEMUA (${formatNumber(allRows.length, 0)} label)</strong></td>
+        <td class="right"><strong>${formatNumber(totalRowsMetric, digits)}</strong></td>
+      </tr>
+    </tfoot>`,
   );
 
   const truncNote = truncated
-    ? `<div class="note-banner">Menampilkan ${formatNumber(MAX_UNSCANNED_LABELS_PRINTED, 0)} dari ${formatNumber(allRows.length, 0)} label tidak ditemukan. Sisanya dapat dicek lewat aplikasi.</div>`
+    ? `<div class="note-banner">Daftar dipotong: menampilkan ${formatNumber(rows.length, 0)} dari ${formatNumber(allRows.length, 0)} label tidak ditemukan. Total di bawah tabel mencakup SEMUA label.</div>`
     : "";
 
   return sectionBlock(

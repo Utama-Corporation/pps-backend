@@ -1302,4 +1302,3 @@ exports.getByNoBJ = async (NoBJ) => {
     Shift: first.Shift,
   };
 };
-

@@ -43,7 +43,7 @@ BEGIN
             SELECT
                 i.IdTurnover,
                 i.NoRetur,
-                i.IdItem,
+                i.IdTarget,
                 i.LabelCode,
                 i.Pcs,
                 i.ScanBy
@@ -67,7 +67,7 @@ BEGIN
             SELECT
                 d.IdTurnover,
                 d.NoRetur,
-                d.IdItem,
+                d.IdTarget,
                 d.LabelCode,
                 d.Pcs,
                 d.ScanBy
@@ -77,7 +77,7 @@ BEGIN
             SELECT
                 i.IdTurnover,
                 i.NoRetur,
-                i.IdItem,
+                i.IdTarget,
                 i.LabelCode,
                 i.Pcs,
                 i.ScanBy
@@ -100,7 +100,7 @@ BEGIN
             SELECT
                 d.IdTurnover,
                 d.NoRetur,
-                d.IdItem,
+                d.IdTarget,
                 d.LabelCode,
                 d.Pcs,
                 d.ScanBy

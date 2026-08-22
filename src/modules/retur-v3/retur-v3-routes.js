@@ -3,9 +3,12 @@ const express = require("express");
 const router = express.Router();
 
 const verifyToken = require("../../core/middleware/verify-token");
+const attachPermissions = require("../../core/middleware/attach-permissions");
+const requirePermission = require("../../core/middleware/require-permission");
 const ctrl = require("./retur-v3-controller");
 
-router.use(verifyToken);
+// urutan penting: verify → attach → require → controller
+router.use(verifyToken, attachPermissions);
 
 router.get("/", ctrl.getAll);
 router.get("/:noRetur", ctrl.getDetail);
@@ -20,14 +23,23 @@ router.post("/:noRetur/items", ctrl.addItems);
 router.put("/:noRetur/items/:idItem", ctrl.updateItem);
 router.delete("/:noRetur/items/:idItem", ctrl.deleteItem);
 
+// Keputusan diganti/tidak-diganti adalah wewenang Sales (retur:decide),
+// terpisah dari retur:update yang dipegang Admin — lihat doc comment
+// ReturV3DetailScreen di frontend untuk pembagian peran lengkap.
 router.patch("/:noRetur/decision", ctrl.decide);
 router.post("/:noRetur/export-gsu", ctrl.exportGsu);
 
 router.post("/:noRetur/items/:idItem/generate-label", ctrl.generateLabel);
-router.post("/:noRetur/items/:idItem/scan", ctrl.scan);
-router.post("/:noRetur/scan", ctrl.scanAuto);
-router.delete("/:noRetur/items/:idItem/scan/:idTurnover", ctrl.undoScan);
 
-router.patch("/:noRetur/flag-kirim", ctrl.flagKirim);
+// Target pengganti (item + pcs) adalah bagian dari keputusan penggantian,
+// jadi wewenangnya ikut retur:decide (Sales) — bukan retur:update.
+router.post("/:noRetur/items/:idItem/targets", ctrl.addTurnoverTargets);
+router.put("/:noRetur/targets/:idTarget", ctrl.updateTurnoverTarget);
+router.delete("/:noRetur/targets/:idTarget", ctrl.deleteTurnoverTarget);
+
+router.post("/:noRetur/scan", ctrl.scanAuto);
+router.delete("/:noRetur/turnover/:idTurnover", ctrl.undoScan);
+
+router.patch("/:noRetur/complete", ctrl.complete);
 
 module.exports = router;

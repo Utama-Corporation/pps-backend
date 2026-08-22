@@ -77,7 +77,7 @@ describe("decide transition guard", () => {
       .mockResolvedValueOnce({ recordset: [{ StatusRetur: "DIGANTI" }] }); // header select
 
     await expect(
-      service.decide("RV.0000000001", "TIDAK_DIGANTI", ctx),
+      service.decide("RV.0000000001", "TIDAK_DIGANTI", {}, ctx),
     ).rejects.toMatchObject({ statusCode: 409 });
   });
 
@@ -94,7 +94,7 @@ describe("decide transition guard", () => {
       .mockResolvedValueOnce({ recordset: [{ cnt: 0 }] }); // item count
 
     await expect(
-      service.decide("RV.0000000001", "DIGANTI", ctx),
+      service.decide("RV.0000000001", "DIGANTI", {}, ctx),
     ).rejects.toMatchObject({ statusCode: 400 });
   });
 });
@@ -155,63 +155,58 @@ describe("generateLabel idempotency", () => {
   });
 });
 
-describe("turnover scan enforcement", () => {
-  it("rejects scan when label jenis doesn't match item exactly", async () => {
+describe("addTurnoverTargets guards", () => {
+  it("throws conflict when header StatusRetur is not DIGANTI", async () => {
     mockQuery
       .mockResolvedValueOnce({ recordset: [] }) // audit context
-      .mockResolvedValueOnce({ recordset: [{ StatusRetur: "DIGANTI" }] }) // header select
-      .mockResolvedValueOnce({
-        recordset: [
-          {
-            IdItem: 1,
-            NoRetur: "RV.0000000001",
-            KodeKategori: "barangjadi",
-            IdJenis: 10,
-            Pcs: 5,
-          },
-        ],
-      }) // item select
-      .mockResolvedValueOnce({
-        recordset: [
-          { Code: "BA.0000000123", IdJenis: 999, Pcs: 3, DateUsage: null },
-        ],
-      }); // label select (mismatched IdJenis)
+      .mockResolvedValueOnce({ recordset: [{ StatusRetur: "PENDING" }] }); // header select
 
     await expect(
-      service.scanTurnover("RV.0000000001", 1, "BA.0000000123", ctx),
-    ).rejects.toMatchObject({ statusCode: 400 });
+      service.addTurnoverTargets(
+        "RV.0000000001",
+        1,
+        [{ kodeKategori: "barangjadi", idJenis: 10, pcs: 3 }],
+        ctx,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409 });
   });
 
-  it("rejects scan when label pcs overshoots remaining target (no partial consumption)", async () => {
+  it("throws notFound when item does not belong to the header", async () => {
     mockQuery
       .mockResolvedValueOnce({ recordset: [] }) // audit context
       .mockResolvedValueOnce({ recordset: [{ StatusRetur: "DIGANTI" }] }) // header select
-      .mockResolvedValueOnce({
-        recordset: [
-          {
-            IdItem: 1,
-            NoRetur: "RV.0000000001",
-            KodeKategori: "barangjadi",
-            IdJenis: 10,
-            Pcs: 5,
-          },
-        ],
-      }) // item select
-      .mockResolvedValueOnce({
-        recordset: [
-          { Code: "BA.0000000123", IdJenis: 10, Pcs: 8, DateUsage: null },
-        ],
-      }) // label select (matches jenis, pcs=8 > target 5)
-      .mockResolvedValueOnce({ recordset: [{ ScannedPcs: 0 }] }); // prior scanned sum
+      .mockResolvedValueOnce({ recordset: [] }); // item lookup (not found)
 
     await expect(
-      service.scanTurnover("RV.0000000001", 1, "BA.0000000123", ctx),
+      service.addTurnoverTargets(
+        "RV.0000000001",
+        1,
+        [{ kodeKategori: "barangjadi", idJenis: 10, pcs: 3 }],
+        ctx,
+      ),
+    ).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("throws badReq when idJenis doesn't exist for the given kategori", async () => {
+    mockQuery
+      .mockResolvedValueOnce({ recordset: [] }) // audit context
+      .mockResolvedValueOnce({ recordset: [{ StatusRetur: "DIGANTI" }] }) // header select
+      .mockResolvedValueOnce({ recordset: [{ IdItem: 1 }] }) // item lookup (found)
+      .mockResolvedValueOnce({ recordset: [] }); // jenisExists check (not found)
+
+    await expect(
+      service.addTurnoverTargets(
+        "RV.0000000001",
+        1,
+        [{ kodeKategori: "barangjadi", idJenis: 999, pcs: 3 }],
+        ctx,
+      ),
     ).rejects.toMatchObject({ statusCode: 400 });
   });
 });
 
 describe("turnover scan auto-detect (single-button scan)", () => {
-  it("rejects when no item in this retur matches the scanned label's kategori+jenis", async () => {
+  it("rejects when no target in this retur matches the scanned label's kategori+jenis", async () => {
     mockQuery
       .mockResolvedValueOnce({ recordset: [] }) // audit context
       .mockResolvedValueOnce({ recordset: [{ StatusRetur: "DIGANTI" }] }) // header select
@@ -220,14 +215,14 @@ describe("turnover scan auto-detect (single-button scan)", () => {
           { Code: "BA.0000000123", IdJenis: 10, Pcs: 3, DateUsage: null },
         ],
       }) // BarangJadi label lookup (found)
-      .mockResolvedValueOnce({ recordset: [] }); // no matching/available candidate items
+      .mockResolvedValueOnce({ recordset: [] }); // no matching/available candidate targets
 
     await expect(
       service.scanTurnoverAuto("RV.0000000001", "BA.0000000123", ctx),
     ).rejects.toMatchObject({ statusCode: 400 });
   });
 
-  it("rejects when the matched item's remaining pcs is less than the label's pcs", async () => {
+  it("rejects when the matched target's remaining pcs is less than the label's pcs", async () => {
     mockQuery
       .mockResolvedValueOnce({ recordset: [] }) // audit context
       .mockResolvedValueOnce({ recordset: [{ StatusRetur: "DIGANTI" }] }) // header select
@@ -237,8 +232,8 @@ describe("turnover scan auto-detect (single-button scan)", () => {
         ],
       }) // BarangJadi label lookup (found, pcs=8)
       .mockResolvedValueOnce({
-        recordset: [{ IdItem: 1, Pcs: 5, ScannedPcs: 0 }],
-      }); // candidate item, remaining=5 < labelPcs=8
+        recordset: [{ IdTarget: 1, IdItem: 1, Pcs: 5, ScannedPcs: 0 }],
+      }); // candidate target, remaining=5 < labelPcs=8
 
     await expect(
       service.scanTurnoverAuto("RV.0000000001", "BA.0000000123", ctx),
@@ -246,31 +241,45 @@ describe("turnover scan auto-detect (single-button scan)", () => {
   });
 });
 
-describe("flagKirim", () => {
-  it("blocks flag-kirim until all items are fulfilled", async () => {
+describe("markComplete", () => {
+  it("blocks completion until every item has a target defined", async () => {
     mockQuery
       .mockResolvedValueOnce({ recordset: [] }) // audit context
       .mockResolvedValueOnce({
-        recordset: [{ StatusRetur: "DIGANTI", FlagKirim: false }],
+        recordset: [{ StatusRetur: "DIGANTI", IsComplete: false }],
       }) // header select
-      .mockResolvedValueOnce({
-        recordset: [{ IdItem: 1, Pcs: 5, ScannedPcs: 3 }],
-      }); // unfulfilled items query
+      .mockResolvedValueOnce({ recordset: [{ IdItem: 1 }] }); // items without a target
 
     await expect(
-      service.flagKirim("RV.0000000001", ctx),
+      service.markComplete("RV.0000000001", ctx),
     ).rejects.toMatchObject({ statusCode: 409 });
   });
 
-  it("is idempotent: rejects when already flagged", async () => {
+  it("blocks completion until all targets are fulfilled", async () => {
     mockQuery
       .mockResolvedValueOnce({ recordset: [] }) // audit context
       .mockResolvedValueOnce({
-        recordset: [{ StatusRetur: "DIGANTI", FlagKirim: true }],
+        recordset: [{ StatusRetur: "DIGANTI", IsComplete: false }],
+      }) // header select
+      .mockResolvedValueOnce({ recordset: [] }) // every item has a target
+      .mockResolvedValueOnce({
+        recordset: [{ IdTarget: 1, Pcs: 5, ScannedPcs: 3 }],
+      }); // unfulfilled targets query
+
+    await expect(
+      service.markComplete("RV.0000000001", ctx),
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("is idempotent: rejects when already complete", async () => {
+    mockQuery
+      .mockResolvedValueOnce({ recordset: [] }) // audit context
+      .mockResolvedValueOnce({
+        recordset: [{ StatusRetur: "DIGANTI", IsComplete: true }],
       }); // header select
 
     await expect(
-      service.flagKirim("RV.0000000001", ctx),
+      service.markComplete("RV.0000000001", ctx),
     ).rejects.toMatchObject({ statusCode: 409 });
   });
 });

@@ -312,6 +312,7 @@ exports.generatePdf = async (req, res) => {
   }
 };
 
+
 exports.incrementHasBeenPrinted = async (req, res) => {
   const { nobj, noBJ } = req.params;
 

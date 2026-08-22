@@ -49,11 +49,10 @@ BEGIN
                 i.DecisionBy,
                 i.DecisionByUsername,
                 i.DecisionAt,
-                i.FlagKirim,
-                i.FlagKirimBy,
-                i.FlagKirimByUsername,
-                i.FlagKirimAt,
-                i.IdWarehouse
+                i.IsComplete,
+                i.CompletedBy,
+                i.CompletedByUsername,
+                i.CompletedAt
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         )
     FROM inserted i
@@ -80,11 +79,10 @@ BEGIN
                 d.DecisionBy,
                 d.DecisionByUsername,
                 d.DecisionAt,
-                d.FlagKirim,
-                d.FlagKirimBy,
-                d.FlagKirimByUsername,
-                d.FlagKirimAt,
-                d.IdWarehouse
+                d.IsComplete,
+                d.CompletedBy,
+                d.CompletedByUsername,
+                d.CompletedAt
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         ),
         (
@@ -97,11 +95,10 @@ BEGIN
                 i.DecisionBy,
                 i.DecisionByUsername,
                 i.DecisionAt,
-                i.FlagKirim,
-                i.FlagKirimBy,
-                i.FlagKirimByUsername,
-                i.FlagKirimAt,
-                i.IdWarehouse
+                i.IsComplete,
+                i.CompletedBy,
+                i.CompletedByUsername,
+                i.CompletedAt
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         )
     FROM inserted i
@@ -127,11 +124,10 @@ BEGIN
                 d.DecisionBy,
                 d.DecisionByUsername,
                 d.DecisionAt,
-                d.FlagKirim,
-                d.FlagKirimBy,
-                d.FlagKirimByUsername,
-                d.FlagKirimAt,
-                d.IdWarehouse
+                d.IsComplete,
+                d.CompletedBy,
+                d.CompletedByUsername,
+                d.CompletedAt
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         ),
         NULL

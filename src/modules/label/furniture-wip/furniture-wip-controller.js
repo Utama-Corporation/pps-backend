@@ -360,3 +360,4 @@ exports.generatePdf = async (req, res) => {
     return res.status(status).json({ success: false, message: err.message });
   }
 };
+

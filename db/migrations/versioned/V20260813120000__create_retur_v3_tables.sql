@@ -1,9 +1,11 @@
--- Retur v3: header + item + turnover (scan tukar barang) + output label mapping tables.
+-- Retur v3: header + item + turnover (scan tukar barang).
 -- Lihat AGENTS.md / task spec fitur "Retur v3" untuk alur bisnis lengkap.
 --
--- Catatan: NoBJ/NoFurnitureWIP/NoReject di tabel legacy adalah VARCHAR(13)
--- (prefix 3 char + 10 digit kode urut, mis. 'BA.0000000001'), bukan VARCHAR(50)
--- seperti asumsi awal — kolom FK di bawah disesuaikan supaya length/scale-nya sama persis.
+-- Label yang digenerate (BarangJadi/FurnitureWIP/RejectV2) DILACAK LEWAT
+-- BJReturV3Item_d.GeneratedLabelCode saja — sengaja tidak ada tabel mapping
+-- output terpisah (lihat V<lebih baru>__drop_bjreturv3_output_label_tables.sql
+-- untuk alasan & cara query-nya kalau tabel itu sempat kebuat di percobaan
+-- sebelumnya).
 -- Setiap CREATE TABLE dibungkus IF OBJECT_ID(...) IS NULL supaya script ini aman
 -- dijalankan ulang meski sebagian tabel sudah sempat dibuat di percobaan sebelumnya.
 
@@ -91,56 +93,3 @@ BEGIN
 END
 GO
 
-IF OBJECT_ID('[dbo].[BJReturV3OutputLabelBarangJadi]', 'U') IS NULL
-BEGIN
-    CREATE TABLE [dbo].[BJReturV3OutputLabelBarangJadi] (
-        [NoRetur] VARCHAR(50) NOT NULL,
-        [NoBJ]    VARCHAR(13) NOT NULL,
-        [IdItem]  INT         NOT NULL,
-
-        CONSTRAINT [PK_BJReturV3OutputLabelBarangJadi] PRIMARY KEY CLUSTERED ([NoRetur] ASC, [NoBJ] ASC),
-        CONSTRAINT [FK_BJReturV3OutputLabelBarangJadi_BJReturV3_h]
-            FOREIGN KEY ([NoRetur]) REFERENCES [dbo].[BJReturV3_h] ([NoRetur]),
-        CONSTRAINT [FK_BJReturV3OutputLabelBarangJadi_BarangJadi]
-            FOREIGN KEY ([NoBJ]) REFERENCES [dbo].[BarangJadi] ([NoBJ]),
-        CONSTRAINT [FK_BJReturV3OutputLabelBarangJadi_BJReturV3Item_d]
-            FOREIGN KEY ([IdItem]) REFERENCES [dbo].[BJReturV3Item_d] ([IdItem])
-    );
-END
-GO
-
-IF OBJECT_ID('[dbo].[BJReturV3OutputLabelFurnitureWIP]', 'U') IS NULL
-BEGIN
-    CREATE TABLE [dbo].[BJReturV3OutputLabelFurnitureWIP] (
-        [NoRetur]        VARCHAR(50) NOT NULL,
-        [NoFurnitureWIP] VARCHAR(13) NOT NULL,
-        [IdItem]         INT         NOT NULL,
-
-        CONSTRAINT [PK_BJReturV3OutputLabelFurnitureWIP] PRIMARY KEY CLUSTERED ([NoRetur] ASC, [NoFurnitureWIP] ASC),
-        CONSTRAINT [FK_BJReturV3OutputLabelFurnitureWIP_BJReturV3_h]
-            FOREIGN KEY ([NoRetur]) REFERENCES [dbo].[BJReturV3_h] ([NoRetur]),
-        CONSTRAINT [FK_BJReturV3OutputLabelFurnitureWIP_FurnitureWIP]
-            FOREIGN KEY ([NoFurnitureWIP]) REFERENCES [dbo].[FurnitureWIP] ([NoFurnitureWIP]),
-        CONSTRAINT [FK_BJReturV3OutputLabelFurnitureWIP_BJReturV3Item_d]
-            FOREIGN KEY ([IdItem]) REFERENCES [dbo].[BJReturV3Item_d] ([IdItem])
-    );
-END
-GO
-
-IF OBJECT_ID('[dbo].[BJReturV3OutputLabelReject]', 'U') IS NULL
-BEGIN
-    CREATE TABLE [dbo].[BJReturV3OutputLabelReject] (
-        [NoRetur]  VARCHAR(50) NOT NULL,
-        [NoReject] VARCHAR(13) NOT NULL,
-        [IdItem]   INT         NOT NULL,
-
-        CONSTRAINT [PK_BJReturV3OutputLabelReject] PRIMARY KEY CLUSTERED ([NoRetur] ASC, [NoReject] ASC),
-        CONSTRAINT [FK_BJReturV3OutputLabelReject_BJReturV3_h]
-            FOREIGN KEY ([NoRetur]) REFERENCES [dbo].[BJReturV3_h] ([NoRetur]),
-        CONSTRAINT [FK_BJReturV3OutputLabelReject_RejectV2]
-            FOREIGN KEY ([NoReject]) REFERENCES [dbo].[RejectV2] ([NoReject]),
-        CONSTRAINT [FK_BJReturV3OutputLabelReject_BJReturV3Item_d]
-            FOREIGN KEY ([IdItem]) REFERENCES [dbo].[BJReturV3Item_d] ([IdItem])
-    );
-END
-GO

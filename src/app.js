@@ -75,6 +75,7 @@ const masterJenisRoutes = require("./modules/master-jenis/master-jenis-routes");
 const masterKategoriRoutes = require("./modules/master-kategori/master-kategori-routes");
 const tradeInRoutes = require("./modules/trade-in/trade-in-routes");
 const returV3Routes = require("./modules/retur-v3/retur-v3-routes");
+const laporanBrokerRoutes = require("./modules/laporan/broker/broker-route");
 
 const app = express();
 
@@ -167,6 +168,7 @@ app.use("/api", mstPrinterRoutes);
 app.use("/api/audit", auditRoutes);
 app.use("/api/trade-in", tradeInRoutes);
 app.use("/api/retur-v3", returV3Routes);
+app.use("/api/laporan/broker", laporanBrokerRoutes);
 
 // ❌ Error handling
 app.use((err, req, res, next) => {

@@ -149,7 +149,7 @@ function buildSummarySection(summary, unit, scannedMetric, unscannedMetric) {
 // sebagai preview di tablet (rasterisasi per halaman pernah bikin OOM).
 // Total tetap dilaporkan lewat callout & stat "Tidak Ditemukan" di atas —
 // bagian ini cuma daftar rincinya.
-const UNSCANNED_CHUNK_SIZE = 400;
+const UNSCANNED_CHUNK_SIZE = 300;
 
 function buildUnscannedLabelsSection(unscannedLabels, unit, unscannedMetric, total) {
   const allRows = unscannedLabels?.data || [];
@@ -177,14 +177,14 @@ function buildUnscannedLabelsSection(unscannedLabels, unit, unscannedMetric, tot
   // yang berat (border per-cell, padding besar, alternating bg).
   // Pakai inline styles supaya Chromium tidak perlu hitung class selector
   // untuk 10.000+ baris.
-  const TH_STYLE = 'style="background:#1e40af;color:#fff;padding:3px 5px;font-size:7px;font-weight:700;border:1px solid #1e3a8a;text-align:left;"';
-  const TH_R = 'style="background:#1e40af;color:#fff;padding:3px 5px;font-size:7px;font-weight:700;border:1px solid #1e3a8a;text-align:right;"';
-  const TH_C = 'style="background:#1e40af;color:#fff;padding:3px 5px;font-size:7px;font-weight:700;border:1px solid #1e3a8a;text-align:center;"';
-  const TD_STYLE = 'style="padding:1px 5px;font-size:7px;border-bottom:1px solid #e2e8f0;';
-  const TD_R = TD_STYLE + 'text-align:right;"';
-  const TD_C = TD_STYLE + 'text-align:center;"';
-  const TFOOT_TL = 'style="background:#eef2ff;padding:3px 5px;font-size:7px;font-weight:700;border-top:2px solid #1e40af;text-align:left;"';
-  const TFOOT_R = 'style="background:#eef2ff;padding:3px 5px;font-size:7px;font-weight:700;border-top:2px solid #1e40af;text-align:right;"';
+  const TH_STYLE = 'style="background:#1e40af;color:#fff;padding:2px 4px;font-size:6px;font-weight:700;border:1px solid #1e3a8a;text-align:left"';
+  const TH_R = 'style="background:#1e40af;color:#fff;padding:2px 4px;font-size:6px;font-weight:700;border:1px solid #1e3a8a;text-align:right"';
+  const TH_C = 'style="background:#1e40af;color:#fff;padding:2px 4px;font-size:6px;font-weight:700;border:1px solid #1e3a8a;text-align:center"';
+  const TD_STYLE = 'style="padding:0 3px;font-size:6px;border-bottom:1px solid #e2e8f0;';
+  const TD_R = TD_STYLE + 'text-align:right"';
+  const TD_C = TD_STYLE + 'text-align:center"';
+  const TFOOT_TL = 'style="background:#eef2ff;padding:2px 3px;font-size:6px;font-weight:700;border-top:2px solid #1e40af;text-align:left"';
+  const TFOOT_R = 'style="background:#eef2ff;padding:2px 3px;font-size:6px;font-weight:700;border-top:2px solid #1e40af;text-align:right"';
 
   const tables = [];
   for (let i = 0; i < allRows.length; i += UNSCANNED_CHUNK_SIZE) {
@@ -214,7 +214,7 @@ function buildUnscannedLabelsSection(unscannedLabels, unit, unscannedMetric, tot
       : "";
 
     tables.push(
-      `<table style="width:100%;border-collapse:collapse;margin-bottom:6px;">
+      `<table style="width:100%;border-collapse:separate;border-spacing:0;">
         <thead><tr>
           <th ${TH_STYLE}>No. Label</th>
           <th ${TH_STYLE}>Jenis</th>

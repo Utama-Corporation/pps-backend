@@ -2135,30 +2135,28 @@ async function getLaporanStockOpnamePdf({ stockOpnameNo }) {
   const page = await browser.newPage();
   await page.setViewport({ width: 794, height: 1123 });
 
+  // Hitung perkiraan halaman berdasarkan ukuran HTML — jika > 2000
+  // baris label unscanned, PDF akan sangat panjang; header/footer
+  // ditiadakan supaya Puppeteer tidak harus merender template per halaman
+  // (yang jadi bottleneck utama untuk dokumen ratusan halaman).
+  const approxRows = (html.match(/<tr>/g) || []).length;
+  const showFooter = approxRows < 2000;
+
   try {
-    await page.goto("about:blank", { waitUntil: "domcontentloaded" });
-    await page.evaluate((h) => {
-      document.open();
-      document.write(h);
-      document.close();
-    }, html);
+    await page.setContent(html, { waitUntil: "domcontentloaded" });
 
     return await page.pdf({
       format: "A4",
       landscape: false,
       printBackground: true,
-      displayHeaderFooter: true,
+      displayHeaderFooter: showFooter,
       headerTemplate: "<span></span>",
-      // "pageNumber"/"totalPages" adalah class khusus yang di-substitusi
-      // Puppeteer sendiri, bukan dari data laporan — laporan ini bisa
-      // berhalaman banyak (mis. daftar label belum discan yang panjang),
-      // jadi nomor halaman penting supaya urutan cetakan fisik tidak
-      // tertukar.
-      footerTemplate: `
-        <div style="width:100%; font-size:8px; color:#94a3b8; text-align:center; font-family:'Segoe UI',Arial,sans-serif;">
-          Halaman <span class="pageNumber"></span> dari <span class="totalPages"></span>
-        </div>`,
-      margin: { top: "8mm", right: "8mm", bottom: "14mm", left: "8mm" },
+      footerTemplate: showFooter
+        ? `<div style="width:100%; font-size:8px; color:#94a3b8; text-align:center; font-family:'Segoe UI',Arial,sans-serif;">
+             Halaman <span class="pageNumber"></span> dari <span class="totalPages"></span>
+           </div>`
+        : "<span></span>",
+      margin: { top: "5mm", right: "5mm", bottom: "8mm", left: "5mm" },
     });
   } finally {
     await page.close();

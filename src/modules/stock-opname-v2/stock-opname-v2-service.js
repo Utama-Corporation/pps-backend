@@ -2070,7 +2070,16 @@ async function getSoV2Browser() {
   if (!soV2BrowserPromise) {
     soV2BrowserPromise = puppeteer.launch({
       headless: "shell",
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--no-zygote",
+        "--single-process",
+        "--disable-extensions",
+        "--disable-background-networking",
+      ],
     });
   }
   return soV2BrowserPromise;

@@ -149,7 +149,7 @@ function buildSummarySection(summary, unit, scannedMetric, unscannedMetric) {
 // sebagai preview di tablet (rasterisasi per halaman pernah bikin OOM).
 // Total tetap dilaporkan lewat callout & stat "Tidak Ditemukan" di atas —
 // bagian ini cuma daftar rincinya.
-const MAX_UNSCANNED_LABELS_PRINTED = 800;
+const UNSCANNED_CHUNK_SIZE = 400;
 
 function buildUnscannedLabelsSection(unscannedLabels, unit, unscannedMetric, total) {
   const allRows = unscannedLabels?.data || [];
@@ -169,63 +169,65 @@ function buildUnscannedLabelsSection(unscannedLabels, unit, unscannedMetric, tot
     `<strong>${formatNumber(unscannedCount, 0)} dari ${formatNumber(labelCount, 0)} label (${missingPct}%)</strong> tidak ditemukan saat opname, setara dengan <strong>${formatNumber(unscannedMetric, unit === "pcs" ? 0 : 2)} ${unitLabel}</strong>.`,
   );
 
-  // Batasi baris tercetak agar PDF ringan, tapi totals tetap bisa
-  // direkonsiliasi: tampilkan subtotal baris tercetak + grand total semua.
-  const MAX_PRINTED = Math.min(MAX_UNSCANNED_LABELS_PRINTED, 500);
-  const truncated = allRows.length > MAX_PRINTED;
-  const rows = truncated ? allRows.slice(0, MAX_PRINTED) : allRows;
-
-  const body = rows
-    .map((row) => {
-      const isUnknownBlok = row.blok === "TIDAK_DIKETAHUI";
-      const rowLokasiLabel = isUnknownBlok
-        ? "Tidak diketahui"
-        : lokasiLabel(row.blok, row.locationId);
-      return `
-        <tr>
-          <td class="label-list">${escapeHtml(row.labelNo)}${
-            row.labelDate
-              ? `<div class="tone-muted" style="font-size:7px;">${escapeHtml(formatDate(row.labelDate))}</div>`
-              : ""
-          }</td>
-          <td>${escapeHtml(row.typeName ?? `Jenis #${row.typeId ?? "-"}`)}</td>
-          <td class="center">${escapeHtml(rowLokasiLabel)}</td>
-          <td class="right">${formatNumber(
-            unit === "pcs" ? (row.pcs ?? 0) : (row.weight ?? 0),
-            unit === "pcs" ? 0 : 2,
-          )}</td>
-        </tr>`;
-    })
-    .join("");
-
-  const metricOf = (r) => (unit === "pcs" ? r.pcs ?? 0 : r.weight ?? 0);
   const digits = unit === "pcs" ? 0 : 2;
-  const printedMetric = rows.reduce((s, r) => s + metricOf(r), 0);
+  const metricOf = (r) => (unit === "pcs" ? r.pcs ?? 0 : r.weight ?? 0);
   const totalRowsMetric = allRows.reduce((s, r) => s + metricOf(r), 0);
 
-  const table = dataTable(
-    `<th>No. Label</th><th>Jenis</th><th class="center">Lokasi</th><th class="right">${unit === "pcs" ? "Pcs" : "Berat"}</th>`,
-    body,
-    `<tfoot>
-      ${truncated ? `<tr>
-        <td colspan="3" class="center">Subtotal (${formatNumber(rows.length, 0)} label tercetak)</td>
-        <td class="right">${formatNumber(printedMetric, digits)}</td>
-      </tr>` : ""}
-      <tr>
-        <td colspan="3" class="center"><strong>TOTAL SEMUA (${formatNumber(allRows.length, 0)} label)</strong></td>
-        <td class="right"><strong>${formatNumber(totalRowsMetric, digits)}</strong></td>
-      </tr>
-    </tfoot>`,
-  );
+  // CSS ringan untuk tabel unscanned — TIDAK pakai class .data-table
+  // yang berat (border per-cell, padding besar, alternating bg).
+  // Pakai inline styles supaya Chromium tidak perlu hitung class selector
+  // untuk 10.000+ baris.
+  const TH_STYLE = 'style="background:#1e40af;color:#fff;padding:3px 5px;font-size:7px;font-weight:700;border:1px solid #1e3a8a;text-align:left;"';
+  const TH_R = 'style="background:#1e40af;color:#fff;padding:3px 5px;font-size:7px;font-weight:700;border:1px solid #1e3a8a;text-align:right;"';
+  const TH_C = 'style="background:#1e40af;color:#fff;padding:3px 5px;font-size:7px;font-weight:700;border:1px solid #1e3a8a;text-align:center;"';
+  const TD_STYLE = 'style="padding:1px 5px;font-size:7px;border-bottom:1px solid #e2e8f0;';
+  const TD_R = TD_STYLE + 'text-align:right;"';
+  const TD_C = TD_STYLE + 'text-align:center;"';
+  const TFOOT_TL = 'style="background:#eef2ff;padding:3px 5px;font-size:7px;font-weight:700;border-top:2px solid #1e40af;text-align:left;"';
+  const TFOOT_R = 'style="background:#eef2ff;padding:3px 5px;font-size:7px;font-weight:700;border-top:2px solid #1e40af;text-align:right;"';
 
-  const truncNote = truncated
-    ? `<div class="note-banner">Daftar dipotong: menampilkan ${formatNumber(rows.length, 0)} dari ${formatNumber(allRows.length, 0)} label tidak ditemukan. Total di bawah tabel mencakup SEMUA label.</div>`
-    : "";
+  const tables = [];
+  for (let i = 0; i < allRows.length; i += UNSCANNED_CHUNK_SIZE) {
+    const chunk = allRows.slice(i, i + UNSCANNED_CHUNK_SIZE);
+    const isLastChunk = (i + UNSCANNED_CHUNK_SIZE) >= allRows.length;
 
-  return sectionBlock(
-    "Label Belum Ditemukan",
-    `${intro}${table}${truncNote}`,
-  );
+    const body = chunk.map((row) => {
+      const lok = row.blok === "TIDAK_DIKETAHUI"
+        ? "Tidak diketahui"
+        : lokasiLabel(row.blok, row.locationId);
+      const dt = row.labelDate ? ` <span style="color:#94a3b8">· ${escapeHtml(formatDate(row.labelDate))}</span>` : "";
+      return `<tr>
+        <td ${TD_STYLE}">${escapeHtml(row.labelNo)}${dt}</td>
+        <td ${TD_STYLE}">${escapeHtml(row.typeName ?? `-`)}</td>
+        <td ${TD_C}">${escapeHtml(lok)}</td>
+        <td ${TD_R}>${formatNumber(metricOf(row), digits)}</td>
+      </tr>`;
+    }).join("");
+
+    const tfoot = isLastChunk
+      ? `<tfoot><tr>
+          <td ${TFOOT_TL}>TOTAL (${formatNumber(allRows.length, 0)} label)</td>
+          <td ${TFOOT_TL}></td>
+          <td ${TFOOT_TL}></td>
+          <td ${TFOOT_R}>${formatNumber(totalRowsMetric, digits)}</td>
+        </tr></tfoot>`
+      : "";
+
+    tables.push(
+      `<table style="width:100%;border-collapse:collapse;margin-bottom:6px;">
+        <thead><tr>
+          <th ${TH_STYLE}>No. Label</th>
+          <th ${TH_STYLE}>Jenis</th>
+          <th ${TH_C}>Lokasi</th>
+          <th ${TH_R}>${unit === "pcs" ? "Pcs" : "Berat"}</th>
+        </tr></thead>
+        <tbody>${body}</tbody>
+        ${tfoot}
+      </table>`
+    );
+  }
+
+  return sectionBlock("Label Belum Ditemukan", `${intro}${tables.join("")}`);
 }
 
 // ── Kendala Lokasi — Salah Lokasi Scan ───────────────────────────────────

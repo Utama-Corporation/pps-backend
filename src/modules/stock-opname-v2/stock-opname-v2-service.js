@@ -1,4 +1,3 @@
-const puppeteer = require("puppeteer");
 const { sql, poolPromise } = require("../../core/config/db");
 const {
   getAllKategori,
@@ -23,7 +22,10 @@ const {
 const {
   buildStockOpnameV2ReportHtml,
 } = require("../../core/utils/pdf/templates/stock-opname-v2-pdf/stock-opname-v2-report-pdf");
+const { generatePdf: generatePdfPdfmake } = require("./report-pdfmake");
 const MAX_LOKASI_PER_USER = 2;
+const PDF_UNSCANNED_DETAIL_LIMIT = 2000;
+const PDF_MISMATCH_DETAIL_LIMIT = 300;
 
 const STOCK_OPNAME_STATUS = {
   NOT_STARTED: "not_started",
@@ -2058,47 +2060,287 @@ async function getLocationMatchReport({ stockOpnameNo }) {
   };
 }
 
-// Laporan PDF (Puppeteer) — merangkum data yang persis sama dengan
+// Laporan cetak — merangkum data yang persis sama dengan
 // getCompleteSummary (total/per-jenis/per-blok) + getScanUserSummary
 // (per-user), ditambah daftar label yang belum discan lewat
 // getUnscannedLabels + kecocokan lokasi scan lewat getLocationMatchReport,
 // supaya laporan cetak selalu konsisten dengan yang
 // ditampilkan FE lewat dialog "Tandai Selesai" / "Ringkasan Scan".
-let soV2BrowserPromise;
+async function getLaporanStockOpnameData({
+  stockOpnameNo,
+  includeLabelDate = true,
+  unscannedDetailLimit = null,
+  mismatchDetailLimit = null,
+}) {
+  const pool = await poolPromise;
+  const { no, header, categoryRow, categoryCode, cfg } =
+    await resolveStockOpnameCategory(pool, stockOpnameNo);
 
-async function getSoV2Browser() {
-  if (!soV2BrowserPromise) {
-    soV2BrowserPromise = puppeteer.launch({
-      headless: "shell",
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-gpu",
-        "--disable-dev-shm-usage",
-        "--no-zygote",
-        "--single-process",
-        "--disable-extensions",
-        "--disable-background-networking",
-      ],
-    });
+  if (!header.IsComplete) {
+    throw conflict(
+      `Stock opname ${no} belum ditandai selesai — laporan hanya tersedia setelah sesi selesai.`,
+    );
   }
-  return soV2BrowserPromise;
+
+  const showWeight = categoryCode !== "furniturewip";
+  const metricColumn = showWeight ? "Berat" : "Pcs";
+  const scannedMatchSql = [
+    "h.NoSO = src.NoSO",
+    ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
+  ].join(" AND ");
+  const labelColumnsSql = cfg.labelColumns.map((c) => `src.${c}`).join(", ");
+  const labelDateSql = includeLabelDate
+    ? labelDateExpr(categoryCode, cfg.labelColumns[0])
+    : "CAST(NULL AS datetime) AS LabelDate";
+  const unscannedTopSql = Number.isInteger(unscannedDetailLimit)
+    ? "TOP (@unscannedDetailLimit)"
+    : "";
+  const mismatchTopSql = Number.isInteger(mismatchDetailLimit)
+    ? "TOP (@mismatchDetailLimit)"
+    : "";
+  const normalizedBlock = (expr) =>
+    `ISNULL(NULLIF(UPPER(LTRIM(RTRIM(${expr}))), ''), '#NULL#')`;
+  const sameLocationSql = `
+    ${normalizedBlock("h.ScannedBlok")} = ${normalizedBlock("src.Blok")}
+    AND ISNULL(h.ScannedIdLokasi, -2147483648) = ISNULL(src.IdLokasi, -2147483648)
+  `;
+  const mismatchSql = `NOT (${sameLocationSql})`;
+
+  const reportReq = pool.request().input("stockOpnameNo", sql.VarChar, no);
+  if (Number.isInteger(unscannedDetailLimit)) {
+    reportReq.input("unscannedDetailLimit", sql.Int, unscannedDetailLimit);
+  }
+  if (Number.isInteger(mismatchDetailLimit)) {
+    reportReq.input("mismatchDetailLimit", sql.Int, mismatchDetailLimit);
+  }
+
+  const [typeMaster, reportRes] = await Promise.all([
+    getJenisByKategori(header.IdKategori),
+    reportReq.query(`
+      SELECT
+        COUNT(*) AS labelCount,
+        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+        SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
+      FROM dbo.${cfg.snapshotTable} AS src
+      LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
+      WHERE src.NoSO = @stockOpnameNo;
+
+      SELECT COUNT(DISTINCT IdUsername) AS assignedUsersCount
+      FROM dbo.MstUserLokasiAccess
+      WHERE NoSO = @stockOpnameNo;
+
+      SELECT
+        src.${cfg.jenisColumn} AS typeId,
+        COUNT(*) AS labelCount,
+        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+        SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
+      FROM dbo.${cfg.snapshotTable} AS src
+      LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
+      WHERE src.NoSO = @stockOpnameNo
+      GROUP BY src.${cfg.jenisColumn};
+
+      SELECT
+        src.Blok AS blok,
+        COUNT(DISTINCT CASE WHEN src.IdLokasi IS NOT NULL THEN src.IdLokasi END)
+          + MAX(CASE WHEN src.IdLokasi IS NULL THEN 1 ELSE 0 END) AS locationCount,
+        COUNT(*) AS labelCount,
+        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+        SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
+      FROM dbo.${cfg.snapshotTable} AS src
+      LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
+      WHERE src.NoSO = @stockOpnameNo
+      GROUP BY src.Blok;
+
+      SELECT
+        h.Username AS username,
+        u.FName,
+        u.LName,
+        COUNT(*) AS labelCount,
+        MIN(h.DateTimeScan) AS firstScanAt,
+        MAX(h.DateTimeScan) AS lastScanAt,
+        ${showWeight ? "ROUND(SUM(ISNULL(h.Berat, 0)), 2) AS totalWeight" : "ROUND(SUM(ISNULL(h.Pcs, 0)), 0) AS totalPcs"}
+      FROM dbo.${cfg.hasilTable} AS h
+      LEFT JOIN dbo.MstUsername AS u ON u.Username = h.Username
+      WHERE h.NoSO = @stockOpnameNo
+      GROUP BY h.Username, u.FName, u.LName
+      ORDER BY labelCount DESC;
+
+      SELECT
+        COUNT(*) AS totalRecords,
+        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalUnscannedMetric" : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalUnscannedMetric"}
+      FROM dbo.${cfg.snapshotTable} AS src
+      LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
+      WHERE src.NoSO = @stockOpnameNo AND h.${cfg.labelColumns[0]} IS NULL;
+
+      SELECT ${unscannedTopSql} ${labelColumnsSql}, src.Blok, src.IdLokasi, src.${cfg.jenisColumn} AS typeId,
+        src.${metricColumn} AS metricValue,
+        ${labelDateSql}
+      FROM dbo.${cfg.snapshotTable} AS src
+      LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
+      WHERE src.NoSO = @stockOpnameNo AND h.${cfg.labelColumns[0]} IS NULL
+      ORDER BY src.Blok ASC, src.IdLokasi ASC, ${labelColumnsSql} ASC;
+
+      SELECT
+        COUNT(*) AS totalScanned,
+        SUM(CASE WHEN ${sameLocationSql} THEN 1 ELSE 0 END) AS matchCount,
+        SUM(CASE WHEN ${sameLocationSql} THEN 0 ELSE 1 END) AS mismatchCount
+      FROM dbo.${cfg.snapshotTable} AS src
+      INNER JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
+      WHERE src.NoSO = @stockOpnameNo;
+
+      SELECT ${mismatchTopSql} ${labelColumnsSql}, src.Blok AS RefBlok, src.IdLokasi AS RefIdLokasi,
+        src.${cfg.jenisColumn} AS typeId,
+        src.${metricColumn} AS metricValue,
+        ${labelDateSql},
+        h.ScannedBlok, h.ScannedIdLokasi, h.DateTimeScan, h.Username,
+        u.FName, u.LName
+      FROM dbo.${cfg.snapshotTable} AS src
+      INNER JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
+      LEFT JOIN dbo.MstUsername AS u ON u.Username = h.Username
+      WHERE src.NoSO = @stockOpnameNo AND ${mismatchSql}
+      ORDER BY src.Blok ASC, src.IdLokasi ASC, ${labelColumnsSql} ASC;
+    `),
+  ]);
+
+  const typeNameById = new Map(
+    (typeMaster?.jenis || []).map((j) => [j.IdJenis, j.NamaJenis]),
+  );
+  const [
+    totalRows = [],
+    assignedRows = [],
+    jenisRows = [],
+    blokRows = [],
+    scanRows = [],
+    unscannedTotalRows = [],
+    unscannedRows = [],
+    locationTotalRows = [],
+    mismatchRows = [],
+  ] = reportRes.recordsets || [];
+
+  const totalRow = totalRows[0] || { labelCount: 0, scannedCount: 0 };
+  const labelCount = totalRow.labelCount || 0;
+  const scannedCount = totalRow.scannedCount || 0;
+  const total = {
+    labelCount,
+    scannedCount,
+    unscannedCount: labelCount - scannedCount,
+    ...(showWeight
+      ? { totalWeight: totalRow.totalWeight ?? 0 }
+      : { totalPcs: totalRow.totalPcs ?? 0 }),
+  };
+
+  const summary = {
+    stockOpnameNo: no,
+    date: header.Tanggal,
+    categoryId: header.IdKategori,
+    categoryCode,
+    categoryName: categoryRow.NamaKategori,
+    isComplete: !!header.IsComplete,
+    completedAt: header.DateComplete ?? null,
+    total,
+    perJenis: (jenisRows || []).map((row) => ({
+      typeId: row.typeId,
+      typeName: typeNameById.get(row.typeId) ?? null,
+      labelCount: row.labelCount,
+      scannedCount: row.scannedCount,
+      unscannedCount: row.labelCount - row.scannedCount,
+      ...(showWeight
+        ? { totalWeight: row.totalWeight }
+        : { totalPcs: row.totalPcs }),
+    })),
+    perBlok: (blokRows || [])
+      .map((row) => ({
+        blok: row.blok ?? UNKNOWN_BLOK_CODE,
+        locationCount: row.blok === null ? 1 : row.locationCount,
+        labelCount: row.labelCount,
+        scannedCount: row.scannedCount,
+        unscannedCount: row.labelCount - row.scannedCount,
+        ...(showWeight
+          ? { totalWeight: row.totalWeight }
+          : { totalPcs: row.totalPcs }),
+        workingLocationCount: 0,
+        workingLocations: [],
+      }))
+      .sort((a, b) => {
+        if (a.blok === UNKNOWN_BLOK_CODE) return 1;
+        if (b.blok === UNKNOWN_BLOK_CODE) return -1;
+        return a.blok < b.blok ? -1 : a.blok > b.blok ? 1 : 0;
+      }),
+    assignedUsersCount: assignedRows[0]?.assignedUsersCount || 0,
+  };
+
+  const scanData = (scanRows || []).map((row) => ({
+    username: row.username,
+    fullName: [row.FName, row.LName].filter(Boolean).join(" ") || null,
+    labelCount: row.labelCount,
+    firstScanAt: row.firstScanAt,
+    lastScanAt: row.lastScanAt,
+    ...(showWeight
+      ? { totalWeight: row.totalWeight }
+      : { totalPcs: row.totalPcs }),
+  }));
+  const scanSummary = {
+    stockOpnameNo: no,
+    categoryId: header.IdKategori,
+    categoryCode,
+    categoryName: categoryRow.NamaKategori,
+    isComplete: !!header.IsComplete,
+    completedAt: header.DateComplete ?? null,
+    data: scanData,
+    totalUsers: scanData.length,
+    totalScanned: scanData.reduce((sum, row) => sum + row.labelCount, 0),
+  };
+
+  const unscannedData = (unscannedRows || []).map((row) => ({
+    labelNo: cfg.labelColumns.map((c) => row[c]).join("-"),
+    labelDate: row.LabelDate ?? null,
+    blok: row.Blok ?? UNKNOWN_BLOK_CODE,
+    locationId: row.IdLokasi ?? UNKNOWN_LOCATION_ID,
+    typeId: row.typeId,
+    typeName: typeNameById.get(row.typeId) ?? null,
+    ...(showWeight
+      ? { weight: row.metricValue ?? 0 }
+      : { pcs: row.metricValue ?? 0 }),
+  }));
+  const unscannedTotal = unscannedTotalRows[0] || {};
+  const totalUnscannedMetric = unscannedTotal.totalUnscannedMetric ?? 0;
+  const unscannedLabels = {
+    stockOpnameNo: no,
+    categoryCode,
+    data: unscannedData,
+    totalRecords: unscannedTotal.totalRecords ?? unscannedData.length,
+    ...(showWeight
+      ? { totalUnscannedWeight: Math.round(totalUnscannedMetric * 100) / 100 }
+      : { totalUnscannedPcs: totalUnscannedMetric }),
+  };
+
+  const mismatches = (mismatchRows || []).map((row) => ({
+    labelNo: cfg.labelColumns.map((c) => row[c]).join("-"),
+    labelDate: row.LabelDate ?? null,
+    typeName: typeNameById.get(row.typeId) ?? null,
+    referenceBlok: row.RefBlok ?? UNKNOWN_BLOK_CODE,
+    referenceLocationId: row.RefIdLokasi ?? UNKNOWN_LOCATION_ID,
+    scannedBlok: row.ScannedBlok ?? UNKNOWN_BLOK_CODE,
+    scannedLocationId: row.ScannedIdLokasi ?? UNKNOWN_LOCATION_ID,
+    username: row.Username,
+    fullName: [row.FName, row.LName].filter(Boolean).join(" ") || null,
+    scannedAt: row.DateTimeScan,
+    ...(showWeight
+      ? { weight: row.metricValue ?? 0 }
+      : { pcs: row.metricValue ?? 0 }),
+  }));
+  const locationTotals = locationTotalRows[0] || {};
+  const locationMatch = {
+    stockOpnameNo: no,
+    categoryCode,
+    totalScanned: locationTotals.totalScanned || 0,
+    matchCount: locationTotals.matchCount || 0,
+    mismatchCount: locationTotals.mismatchCount || mismatches.length,
+    mismatches,
+  };
+
+  return { summary, scanSummary, unscannedLabels, locationMatch };
 }
-
-process.on("SIGINT", async () => {
-  if (soV2BrowserPromise) {
-    const b = await soV2BrowserPromise;
-    await b.close();
-    soV2BrowserPromise = null;
-  }
-});
-process.on("SIGTERM", async () => {
-  if (soV2BrowserPromise) {
-    const b = await soV2BrowserPromise;
-    await b.close();
-    soV2BrowserPromise = null;
-  }
-});
 
 async function getLaporanStockOpnameHtml({ stockOpnameNo }) {
   // Laporan ini meringkas HASIL AKHIR (selisih & kendala lokasi) — cuma
@@ -2113,12 +2355,11 @@ async function getLaporanStockOpnameHtml({ stockOpnameNo }) {
     );
   }
 
-  const [summary, scanSummary, unscannedLabels, locationMatch] = await Promise.all([
-    getCompleteSummary({ stockOpnameNo }),
-    getScanUserSummary({ stockOpnameNo }),
-    getUnscannedLabels({ stockOpnameNo }),
-    getLocationMatchReport({ stockOpnameNo }),
-  ]);
+  const { summary, scanSummary, unscannedLabels, locationMatch } =
+    await getLaporanStockOpnameData({
+      stockOpnameNo,
+      includeLabelDate: true,
+    });
 
   return buildStockOpnameV2ReportHtml({
     summary,
@@ -2129,38 +2370,15 @@ async function getLaporanStockOpnameHtml({ stockOpnameNo }) {
 }
 
 async function getLaporanStockOpnamePdf({ stockOpnameNo }) {
-  const html = await getLaporanStockOpnameHtml({ stockOpnameNo });
-
-  const browser = await getSoV2Browser();
-  const page = await browser.newPage();
-  await page.setViewport({ width: 794, height: 1123 });
-
-  // Hitung perkiraan halaman berdasarkan ukuran HTML — jika > 2000
-  // baris label unscanned, PDF akan sangat panjang; header/footer
-  // ditiadakan supaya Puppeteer tidak harus merender template per halaman
-  // (yang jadi bottleneck utama untuk dokumen ratusan halaman).
-  const approxRows = (html.match(/<tr>/g) || []).length;
-  const showFooter = approxRows < 2000;
-
-  try {
-    await page.setContent(html, { waitUntil: "domcontentloaded" });
-
-    return await page.pdf({
-      format: "A4",
-      landscape: false,
-      printBackground: true,
-      displayHeaderFooter: showFooter,
-      headerTemplate: "<span></span>",
-      footerTemplate: showFooter
-        ? `<div style="width:100%; font-size:8px; color:#94a3b8; text-align:center; font-family:'Segoe UI',Arial,sans-serif;">
-             Halaman <span class="pageNumber"></span> dari <span class="totalPages"></span>
-           </div>`
-        : "<span></span>",
-      margin: { top: "5mm", right: "5mm", bottom: "8mm", left: "5mm" },
+  const { summary, scanSummary, unscannedLabels, locationMatch } =
+    await getLaporanStockOpnameData({
+      stockOpnameNo,
+      includeLabelDate: true,
+      unscannedDetailLimit: PDF_UNSCANNED_DETAIL_LIMIT,
+      mismatchDetailLimit: PDF_MISMATCH_DETAIL_LIMIT,
     });
-  } finally {
-    await page.close();
-  }
+
+  return generatePdfPdfmake({ summary, scanSummary, unscannedLabels, locationMatch });
 }
 
 async function deleteStockOpname({ stockOpnameNo, ctx }) {

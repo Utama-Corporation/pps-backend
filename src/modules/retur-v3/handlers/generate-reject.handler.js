@@ -9,6 +9,7 @@ const { applyAuditContext } = require("../../../core/utils/db-audit-context");
 // KategoriInput=REJECT => body must supply {berat, idReject}; generates a
 // RejectV2 label instead of a barangjadi/furniturewip label. Insert shape
 // copied verbatim from sortir-reject-v2 create-reject.handler.js.
+// keterangan tambahan
 exports.generateRejectLabel = async (noRetur, idItem, body, ctx) => {
   const { actorId, actorUsername, requestId } = ctx;
   const berat = Number(body?.berat);

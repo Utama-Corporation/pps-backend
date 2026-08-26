@@ -986,7 +986,7 @@ async function exportToGsuInTx(tx, noRetur, actorUsername, remarks = []) {
     throw conflict(`Retur ${noRetur} sudah pernah diekspor ke AS_GSU. Tidak boleh diproses lagi.`);
   }
 
-  // 1) Data retur (mengikuti query yang diberikan user)
+  // 1) Data retur — conditional join ke master item sesuai KodeKategori
   const dataRes = await new sql.Request(tx)
     .input("No", sql.VarChar(50), noRetur).query(`
       SELECT
@@ -994,20 +994,20 @@ async function exportToGsuInTx(tx, noRetur, actorUsername, remarks = []) {
         A.Tanggal,
         F.CustomerID,
         F.CustomerName,
-        G.ItemID,
-        G.ItemName,
+        COALESCE(BJ.IdBJ, D.IdCabinetWIP) AS MstItemId,
         B.IdItem,
         B.Pcs,
+        G.ItemID,
         ${GSU_TRANSIT_DB}.UDF_Common_GetSmallestUOMLevel(
           G.UOMID1, G.UOMID2, G.UOMID3, G.UOMID4
         ) AS UOMLevel
       FROM dbo.BJReturV3_h A
       LEFT JOIN dbo.BJReturV3Item_d B ON B.NoRetur = A.NoRetur
-      LEFT JOIN dbo.MstKategori C ON C.KodeKategori = B.KodeKategori
-      LEFT JOIN dbo.MstCabinetWIP D ON D.IdCabinetWIP = B.IdJenis
+      LEFT JOIN dbo.MstBarangJadi BJ ON BJ.IdBJ = B.IdJenis AND B.KodeKategori = 'barangjadi'
+      LEFT JOIN dbo.MstCabinetWIP D ON D.IdCabinetWIP = B.IdJenis AND B.KodeKategori = 'furniturewip'
       LEFT JOIN dbo.MstPembeli E ON E.IdPembeli = A.IdPembeli
       LEFT JOIN ${GSU_TRANSIT_DB}.AR_Customers F ON F.CustomerCode = E.CustomerCode
-      INNER JOIN ${GSU_TRANSIT_DB}.IC_Items G ON G.ItemCode = D.ItemCode
+      LEFT JOIN ${GSU_TRANSIT_DB}.IC_Items G ON G.ItemCode = COALESCE(BJ.ItemCode, D.ItemCode)
       WHERE A.NoRetur = @No
     `);
   const rows = dataRes.recordset || [];

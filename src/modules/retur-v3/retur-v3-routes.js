@@ -15,75 +15,31 @@ router.get("/:noRetur", ctrl.getDetail);
 router.get("/:noRetur/outputs", ctrl.getOutputs);
 router.get("/:noRetur/turnover", ctrl.getTurnover);
 
-router.post("/", requirePermission("retur:create"), ctrl.create);
-router.put("/:noRetur", requirePermission("retur:update"), ctrl.update);
-router.delete("/:noRetur", requirePermission("retur:delete"), ctrl.remove);
+router.post("/", ctrl.create);
+router.put("/:noRetur", ctrl.update);
+router.delete("/:noRetur", ctrl.remove);
 
-router.post(
-  "/:noRetur/items",
-  requirePermission("retur:create"),
-  ctrl.addItems,
-);
-router.put(
-  "/:noRetur/items/:idItem",
-  requirePermission("retur:update"),
-  ctrl.updateItem,
-);
-router.delete(
-  "/:noRetur/items/:idItem",
-  requirePermission("retur:update"),
-  ctrl.deleteItem,
-);
+router.post("/:noRetur/items", ctrl.addItems);
+router.put("/:noRetur/items/:idItem", ctrl.updateItem);
+router.delete("/:noRetur/items/:idItem", ctrl.deleteItem);
 
 // Keputusan diganti/tidak-diganti adalah wewenang Sales (retur:decide),
 // terpisah dari retur:update yang dipegang Admin — lihat doc comment
 // ReturV3DetailScreen di frontend untuk pembagian peran lengkap.
-router.patch(
-  "/:noRetur/decision",
-  requirePermission("retur:decide"),
-  ctrl.decide,
-);
-router.post(
-  "/:noRetur/export-gsu",
-  requirePermission("retur:update"),
-  ctrl.exportGsu,
-);
+router.patch("/:noRetur/decision", ctrl.decide);
+router.post("/:noRetur/export-gsu", ctrl.exportGsu);
 
-router.post(
-  "/:noRetur/items/:idItem/generate-label",
-  requirePermission("retur:update"),
-  ctrl.generateLabel,
-);
+router.post("/:noRetur/items/:idItem/generate-label", ctrl.generateLabel);
 
 // Target pengganti (item + pcs) adalah bagian dari keputusan penggantian,
 // jadi wewenangnya ikut retur:decide (Sales) — bukan retur:update.
-router.post(
-  "/:noRetur/items/:idItem/targets",
-  requirePermission("retur:decide"),
-  ctrl.addTurnoverTargets,
-);
-router.put(
-  "/:noRetur/targets/:idTarget",
-  requirePermission("retur:decide"),
-  ctrl.updateTurnoverTarget,
-);
-router.delete(
-  "/:noRetur/targets/:idTarget",
-  requirePermission("retur:decide"),
-  ctrl.deleteTurnoverTarget,
-);
+router.post("/:noRetur/items/:idItem/targets", ctrl.addTurnoverTargets);
+router.put("/:noRetur/targets/:idTarget", ctrl.updateTurnoverTarget);
+router.delete("/:noRetur/targets/:idTarget", ctrl.deleteTurnoverTarget);
 
-router.post("/:noRetur/scan", requirePermission("retur:update"), ctrl.scanAuto);
-router.delete(
-  "/:noRetur/turnover/:idTurnover",
-  requirePermission("retur:update"),
-  ctrl.undoScan,
-);
+router.post("/:noRetur/scan", ctrl.scanAuto);
+router.delete("/:noRetur/turnover/:idTurnover", ctrl.undoScan);
 
-router.patch(
-  "/:noRetur/complete",
-  requirePermission("retur:update"),
-  ctrl.complete,
-);
+router.patch("/:noRetur/complete", ctrl.complete);
 
 module.exports = router;

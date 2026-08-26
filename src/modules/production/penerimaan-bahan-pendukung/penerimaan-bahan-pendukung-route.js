@@ -14,5 +14,7 @@ router.post("/", verifyToken, ctrl.createHeader);
 // Fase 2: tambah barang ke header yang sudah ada — boleh dipanggil >1x.
 router.post("/:noPenerimaan/items", verifyToken, ctrl.addItems);
 router.delete("/:noPenerimaan", verifyToken, ctrl.remove);
+// Tandai penerimaan sebagai selesai (IsComplete = 1).
+router.patch("/:noPenerimaan/complete", verifyToken, ctrl.complete);
 
 module.exports = router;

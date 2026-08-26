@@ -129,4 +129,20 @@ async function remove(req, res) {
   }
 }
 
-module.exports = { list, getDetail, createHeader, addItems, remove, timStatus };
+async function complete(req, res) {
+  const ctx = buildCtx(req);
+  try {
+    await service.completePenerimaanBahanPendukung(req.params.noPenerimaan, ctx);
+    return res.status(200).json({ success: true, message: "Penerimaan bahan pendukung ditandai selesai" });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    console.error("Error completing PenerimaanBahanPendukung:", error);
+    return res.status(statusCode).json({
+      success: false,
+      message: statusCode === 500 ? "Internal Server Error" : error.message,
+      ...(statusCode === 500 ? { error: error.message } : {}),
+    });
+  }
+}
+
+module.exports = { list, getDetail, createHeader, addItems, remove, timStatus, complete };

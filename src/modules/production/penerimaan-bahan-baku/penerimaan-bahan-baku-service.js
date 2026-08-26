@@ -177,7 +177,7 @@ async function generateUniqueCode(tx, opts) {
 async function assertTimAktif(tx, idTim) {
   const result = await new sql.Request(tx)
     .input("IdTim", sql.Int, idTim)
-    .query(`SELECT Aktif FROM dbo.MstTimPenerimaanBB WHERE IdTim = @IdTim`);
+    .query(`SELECT Aktif FROM dbo.MstTimPenerimaan WHERE IdTim = @IdTim AND TipeModul = 'BAHAN_BAKU'`);
 
   const row = result.recordset[0];
   if (!row) {
@@ -526,7 +526,7 @@ async function listPenerimaanBahanBaku({ page = 1, pageSize = 20, filter = "", k
     FROM dbo.PenerimaanBahanBaku_h h WITH (NOLOCK)
     LEFT JOIN BB bb ON bb.NoPenerimaan = h.NoPenerimaan AND bb.rn = 1
     LEFT JOIN dbo.MstSupplier sup WITH (NOLOCK) ON sup.IdSupplier = bb.IdSupplier
-    LEFT JOIN dbo.MstTimPenerimaanBB t WITH (NOLOCK) ON t.IdTim = h.IdTim
+    LEFT JOIN dbo.MstTimPenerimaan t WITH (NOLOCK) ON t.IdTim = h.IdTim AND t.TipeModul = 'BAHAN_BAKU'
     ${whereClause};
   `);
   const total = countRes.recordset?.[0]?.total || 0;
@@ -560,7 +560,7 @@ async function listPenerimaanBahanBaku({ page = 1, pageSize = 20, filter = "", k
     FROM dbo.PenerimaanBahanBaku_h h WITH (NOLOCK)
     LEFT JOIN BB bb ON bb.NoPenerimaan = h.NoPenerimaan AND bb.rn = 1
     LEFT JOIN dbo.MstSupplier sup WITH (NOLOCK) ON sup.IdSupplier = bb.IdSupplier
-    LEFT JOIN dbo.MstTimPenerimaanBB t WITH (NOLOCK) ON t.IdTim = h.IdTim
+    LEFT JOIN dbo.MstTimPenerimaan t WITH (NOLOCK) ON t.IdTim = h.IdTim AND t.TipeModul = 'BAHAN_BAKU'
     OUTER APPLY (
       SELECT
         JSON_QUERY(COALESCE(
@@ -613,7 +613,7 @@ async function getDetailPenerimaanBahanBaku(noPenerimaan) {
       h.CreateBy,
       h.DateTimeCreate
     FROM dbo.PenerimaanBahanBaku_h h
-    LEFT JOIN dbo.MstTimPenerimaanBB t ON t.IdTim = h.IdTim
+    LEFT JOIN dbo.MstTimPenerimaan t ON t.IdTim = h.IdTim AND t.TipeModul = 'BAHAN_BAKU'
     OUTER APPLY (
       SELECT
         JSON_QUERY(COALESCE(
@@ -787,7 +787,7 @@ async function getTimStatus() {
       CONVERT(VARCHAR(8), today.HourStart, 108) AS HourStart,
       CONVERT(VARCHAR(8), today.HourEnd, 108) AS HourEnd,
       today.NamaOperators
-    FROM dbo.MstTimPenerimaanBB t WITH (NOLOCK)
+    FROM dbo.MstTimPenerimaan t WITH (NOLOCK)
     OUTER APPLY (
       SELECT TOP 1
         h.NoPenerimaan, h.TglPenerimaan, h.Shift, h.HourStart, h.HourEnd,
@@ -803,6 +803,7 @@ async function getTimStatus() {
         AND CONVERT(date, h.TglPenerimaan) = CONVERT(date, GETDATE())
       ORDER BY h.DateTimeCreate DESC
     ) today
+    WHERE t.TipeModul = 'BAHAN_BAKU'
     ORDER BY t.NamaTim ASC;
   `);
 

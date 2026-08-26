@@ -1,5 +1,5 @@
-// master-tim-penerimaan-bb-controller.js
-const service = require("./master-tim-penerimaan-bb-service");
+// master-tim-penerimaan-bahan-pendukung-controller.js
+const service = require("./master-tim-penerimaan-bahan-pendukung-service");
 
 function parseId(raw) {
   const id = parseInt(raw, 10);
@@ -17,12 +17,12 @@ async function list(req, res) {
     const rows = await service.listAll({ q, includeInactive, orderBy, orderDir });
     return res.status(200).json({
       success: true,
-      message: "Data MstTimPenerimaanBB berhasil diambil",
+      message: "Data tim penerimaan bahan pendukung berhasil diambil",
       totalData: rows.length,
       data: rows,
     });
   } catch (error) {
-    console.error("Error listing MstTimPenerimaanBB:", error);
+    console.error("Error listing tim penerimaan bahan pendukung:", error);
     return res.status(500).json({
       success: false,
       message: "Internal Server Error",
@@ -40,12 +40,12 @@ async function getById(req, res) {
   try {
     const row = await service.getById(idTim);
     if (!row) {
-      return res.status(404).json({ success: false, message: "Data MstTimPenerimaanBB tidak ditemukan" });
+      return res.status(404).json({ success: false, message: "Data tim penerimaan bahan pendukung tidak ditemukan" });
     }
 
-    return res.status(200).json({ success: true, message: "Data MstTimPenerimaanBB berhasil diambil", data: row });
+    return res.status(200).json({ success: true, message: "Data tim penerimaan bahan pendukung berhasil diambil", data: row });
   } catch (error) {
-    console.error("Error get MstTimPenerimaanBB:", error);
+    console.error("Error get tim penerimaan bahan pendukung:", error);
     return res.status(500).json({ success: false, message: "Internal Server Error", error: error.message });
   }
 }
@@ -57,10 +57,10 @@ async function create(req, res) {
       keterangan: req.body?.keterangan,
     });
 
-    return res.status(201).json({ success: true, message: "Tim penerimaan bahan baku berhasil dibuat", data });
+    return res.status(201).json({ success: true, message: "Tim penerimaan bahan pendukung berhasil dibuat", data });
   } catch (error) {
     const statusCode = error.statusCode || 500;
-    console.error("Error creating MstTimPenerimaanBB:", error);
+    console.error("Error creating tim penerimaan bahan pendukung:", error);
     return res.status(statusCode).json({
       success: false,
       message: statusCode === 500 ? "Internal Server Error" : error.message,
@@ -82,10 +82,10 @@ async function update(req, res) {
       aktif: req.body?.aktif,
     });
 
-    return res.status(200).json({ success: true, message: "Tim penerimaan bahan baku berhasil diperbarui", data });
+    return res.status(200).json({ success: true, message: "Tim penerimaan bahan pendukung berhasil diperbarui", data });
   } catch (error) {
     const statusCode = error.statusCode || 500;
-    console.error("Error updating MstTimPenerimaanBB:", error);
+    console.error("Error updating tim penerimaan bahan pendukung:", error);
     return res.status(statusCode).json({
       success: false,
       message: statusCode === 500 ? "Internal Server Error" : error.message,
@@ -102,10 +102,10 @@ async function remove(req, res) {
 
   try {
     await service.remove(idTim);
-    return res.status(200).json({ success: true, message: "Tim penerimaan bahan baku berhasil dihapus" });
+    return res.status(200).json({ success: true, message: "Tim penerimaan bahan pendukung berhasil dihapus" });
   } catch (error) {
     const statusCode = error.statusCode || 500;
-    console.error("Error deleting MstTimPenerimaanBB:", error);
+    console.error("Error deleting tim penerimaan bahan pendukung:", error);
     return res.status(statusCode).json({
       success: false,
       message: statusCode === 500 ? "Internal Server Error" : error.message,

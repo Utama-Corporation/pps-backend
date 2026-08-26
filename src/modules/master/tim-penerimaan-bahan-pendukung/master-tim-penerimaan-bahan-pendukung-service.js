@@ -1,16 +1,14 @@
-// master-tim-penerimaan-bb-service.js
+// master-tim-penerimaan-bahan-pendukung-service.js
 //
-// CRUD tim penerimaan bahan baku — sejak konsolidasi MstTimPenerimaanBB ke
-// dbo.MstTimPenerimaan (kolom flag TipeModul), module ini beroperasi di
-// atas MstTimPenerimaan dengan filter TipeModul='BAHAN_BAKU' tetap, supaya
-// tim modul lain (Bahan Pendukung, Barang Dagang) tidak ikut muncul/
-// tertimpa di sini. Nama module & route TIDAK diubah untuk kompatibilitas
-// caller yang sudah ada. Tidak ada konsep operator/kepala tim di modul
-// penerimaan (kolom KepalaTim sudah di-drop dari MstTimPenerimaan).
+// CRUD tim penerimaan bahan pendukung — beroperasi di atas dbo.MstTimPenerimaan
+// (tabel gabungan, kolom flag TipeModul) dengan filter TipeModul='BAHAN_PENDUKUNG'
+// tetap, mirroring master-tim-penerimaan-bb-service.js (modul Bahan Baku),
+// supaya tim modul lain (Bahan Baku, Barang Dagang) tidak ikut muncul/tertimpa
+// di sini. Tidak ada konsep operator/kepala tim di modul penerimaan ini.
 const { poolPromise, sql } = require("../../../core/config/db");
 const { badReq, notFound } = require("../../../core/utils/http-error");
 
-const TIPE_MODUL = "BAHAN_BAKU";
+const TIPE_MODUL = "BAHAN_PENDUKUNG";
 
 async function listAll({
   q = "",
@@ -112,7 +110,7 @@ async function create({ namaTim, keterangan }) {
 async function update(idTim, { namaTim, keterangan, aktif }) {
   const existing = await getById(idTim);
   if (!existing) {
-    throw notFound("Data MstTimPenerimaanBB tidak ditemukan");
+    throw notFound("Data tim penerimaan bahan pendukung tidak ditemukan");
   }
 
   const payload = normalizePayload({ namaTim, keterangan });
@@ -148,7 +146,7 @@ async function remove(idTim) {
     .query(`DELETE FROM [dbo].[MstTimPenerimaan] WHERE IdTim = @IdTim AND TipeModul = @TipeModul;`);
 
   if ((result.rowsAffected && result.rowsAffected[0]) === 0) {
-    throw notFound("Data MstTimPenerimaanBB tidak ditemukan");
+    throw notFound("Data tim penerimaan bahan pendukung tidak ditemukan");
   }
 
   return true;

@@ -80,7 +80,7 @@ async function _isInTransit(runner, labelCode) {
   const res = await req
     .input("LabelCode", sql.NVarChar(50), labelCode).query(`
       SELECT TOP 1 1 AS Found
-      FROM dbo.GoodTransferItem
+      FROM dbo.GoodsTransferItem
       WHERE LabelCode = @LabelCode AND StatusItem = 'IN_TRANSIT'
     `);
   return res.recordset.length > 0;
@@ -119,7 +119,7 @@ async function inspectLabel({ labelCode, idWarehouseAsal }) {
     return {
       success: false,
       code: "LABEL_IN_TRANSIT",
-      message: `Label ${code} sedang dalam proses Good Transfer lain`,
+      message: `Label ${code} sedang dalam proses Goods Transfer lain`,
     };
   }
 
@@ -152,9 +152,9 @@ async function inspectLabel({ labelCode, idWarehouseAsal }) {
 }
 
 /**
- * Create Good Transfer: kirim N label dari 1 warehouse asal ke 1 warehouse tujuan.
+ * Create Goods Transfer: kirim N label dari 1 warehouse asal ke 1 warehouse tujuan.
  */
-async function createGoodTransfer({
+async function createGoodsTransfer({
   idWarehouseAsal,
   idWarehouseTujuan,
   labelCodes,
@@ -209,7 +209,7 @@ async function createGoodTransfer({
     await assertNotLocked({
       date: tanggalKirim,
       runner: tx,
-      action: "membuat Good Transfer",
+      action: "membuat Goods Transfer",
       useLock: true,
     });
 
@@ -245,14 +245,14 @@ async function createGoodTransfer({
         return {
           success: false,
           code: "LABEL_IN_TRANSIT",
-          message: `Label ${labelCode} sedang dalam proses Good Transfer lain`,
+          message: `Label ${labelCode} sedang dalam proses Goods Transfer lain`,
         };
       }
       items.push({ labelCode, ...info });
     }
 
     const noTransfer = await generateNextCode(tx, {
-      tableName: "dbo.GoodTransfer_h",
+      tableName: "dbo.GoodsTransfer_h",
       columnName: "NoTransfer",
       prefix: "GT.",
       width: 10,
@@ -265,7 +265,7 @@ async function createGoodTransfer({
       .input("IdWarehouseTujuan", sql.Int, whTujuan)
       .input("IdUsernameKirim", sql.Int, actorId)
       .input("Catatan", sql.VarChar(500), catatan || null).query(`
-        INSERT INTO dbo.GoodTransfer_h
+        INSERT INTO dbo.GoodsTransfer_h
           (NoTransfer, TanggalKirim, IdWarehouseAsal, IdWarehouseTujuan, IdUsernameKirim, Catatan)
         VALUES
           (@NoTransfer, @TanggalKirim, @IdWarehouseAsal, @IdWarehouseTujuan, @IdUsernameKirim, @Catatan)
@@ -278,7 +278,7 @@ async function createGoodTransfer({
         .input("PrefixKategori", sql.VarChar(10), item.prefix)
         .input("BlokAsal", sql.VarChar(50), item.blok)
         .input("IdLokasiAsal", sql.Int, item.idLokasi).query(`
-          INSERT INTO dbo.GoodTransferItem
+          INSERT INTO dbo.GoodsTransferItem
             (NoTransfer, LabelCode, PrefixKategori, BlokAsal, IdLokasiAsal)
           VALUES
             (@NoTransfer, @LabelCode, @PrefixKategori, @BlokAsal, @IdLokasiAsal)
@@ -290,7 +290,7 @@ async function createGoodTransfer({
     return {
       success: true,
       code: "CREATED",
-      message: `Good Transfer ${noTransfer} berhasil dibuat`,
+      message: `Goods Transfer ${noTransfer} berhasil dibuat`,
       data: { noTransfer, itemCount: items.length },
     };
   } catch (err) {
@@ -308,7 +308,7 @@ async function _getHeader(runner, noTransfer) {
   const res = await req.input("NoTransfer", sql.VarChar(20), noTransfer).query(`
       SELECT h.*, whAsal.NamaWarehouse AS NamaWarehouseAsal, whTujuan.NamaWarehouse AS NamaWarehouseTujuan,
              uKirim.Username AS UsernameKirim, uTerima.Username AS UsernameTerima
-      FROM dbo.GoodTransfer_h h
+      FROM dbo.GoodsTransfer_h h
       LEFT JOIN dbo.MstWarehouse whAsal ON whAsal.IdWarehouse = h.IdWarehouseAsal
       LEFT JOIN dbo.MstWarehouse whTujuan ON whTujuan.IdWarehouse = h.IdWarehouseTujuan
       LEFT JOIN dbo.MstUsername uKirim ON uKirim.IdUsername = h.IdUsernameKirim
@@ -327,7 +327,7 @@ async function getDetail(noTransfer) {
   const itemsRes = await pool
     .request()
     .input("NoTransfer", sql.VarChar(20), noTransfer)
-    .query(`SELECT * FROM dbo.GoodTransferItem WHERE NoTransfer = @NoTransfer ORDER BY IdTransferItem`);
+    .query(`SELECT * FROM dbo.GoodsTransferItem WHERE NoTransfer = @NoTransfer ORDER BY IdTransferItem`);
 
   // Lengkapi tiap item dengan ringkasan label (jenis/kategori/uom/qty/berat) —
   // sumber sama dengan yang dipakai layar Create (inspect-label), supaya
@@ -366,8 +366,8 @@ async function listAll({ status, page = 1, limit = 50 }) {
   const res = await req.query(`
     SELECT h.*, whAsal.NamaWarehouse AS NamaWarehouseAsal, whTujuan.NamaWarehouse AS NamaWarehouseTujuan,
            uKirim.Username AS UsernameKirim,
-           (SELECT COUNT(*) FROM dbo.GoodTransferItem gi WHERE gi.NoTransfer = h.NoTransfer) AS ItemCount
-    FROM dbo.GoodTransfer_h h
+           (SELECT COUNT(*) FROM dbo.GoodsTransferItem gi WHERE gi.NoTransfer = h.NoTransfer) AS ItemCount
+    FROM dbo.GoodsTransfer_h h
     LEFT JOIN dbo.MstWarehouse whAsal ON whAsal.IdWarehouse = h.IdWarehouseAsal
     LEFT JOIN dbo.MstWarehouse whTujuan ON whTujuan.IdWarehouse = h.IdWarehouseTujuan
     LEFT JOIN dbo.MstUsername uKirim ON uKirim.IdUsername = h.IdUsernameKirim
@@ -392,8 +392,8 @@ async function listOutgoing({ idWarehouseAsal, status, page = 1, limit = 50 }) {
   const res = await req.query(`
     SELECT h.*, whAsal.NamaWarehouse AS NamaWarehouseAsal, whTujuan.NamaWarehouse AS NamaWarehouseTujuan,
            uKirim.Username AS UsernameKirim,
-           (SELECT COUNT(*) FROM dbo.GoodTransferItem gi WHERE gi.NoTransfer = h.NoTransfer) AS ItemCount
-    FROM dbo.GoodTransfer_h h
+           (SELECT COUNT(*) FROM dbo.GoodsTransferItem gi WHERE gi.NoTransfer = h.NoTransfer) AS ItemCount
+    FROM dbo.GoodsTransfer_h h
     LEFT JOIN dbo.MstWarehouse whAsal ON whAsal.IdWarehouse = h.IdWarehouseAsal
     LEFT JOIN dbo.MstWarehouse whTujuan ON whTujuan.IdWarehouse = h.IdWarehouseTujuan
     LEFT JOIN dbo.MstUsername uKirim ON uKirim.IdUsername = h.IdUsernameKirim
@@ -418,8 +418,8 @@ async function listIncoming({ idWarehouseTujuan, status, page = 1, limit = 50 })
   const res = await req.query(`
     SELECT h.*, whAsal.NamaWarehouse AS NamaWarehouseAsal, whTujuan.NamaWarehouse AS NamaWarehouseTujuan,
            uKirim.Username AS UsernameKirim,
-           (SELECT COUNT(*) FROM dbo.GoodTransferItem gi WHERE gi.NoTransfer = h.NoTransfer) AS ItemCount
-    FROM dbo.GoodTransfer_h h
+           (SELECT COUNT(*) FROM dbo.GoodsTransferItem gi WHERE gi.NoTransfer = h.NoTransfer) AS ItemCount
+    FROM dbo.GoodsTransfer_h h
     LEFT JOIN dbo.MstWarehouse whAsal ON whAsal.IdWarehouse = h.IdWarehouseAsal
     LEFT JOIN dbo.MstWarehouse whTujuan ON whTujuan.IdWarehouse = h.IdWarehouseTujuan
     LEFT JOIN dbo.MstUsername uKirim ON uKirim.IdUsername = h.IdUsernameKirim
@@ -430,7 +430,7 @@ async function listIncoming({ idWarehouseTujuan, status, page = 1, limit = 50 })
   return { success: true, data: res.recordset };
 }
 
-async function cancelGoodTransfer({ noTransfer, actorId, actorUsername, requestId }) {
+async function cancelGoodsTransfer({ noTransfer, actorId, actorUsername, requestId }) {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   let began = false;
@@ -444,7 +444,7 @@ async function cancelGoodTransfer({ noTransfer, actorId, actorUsername, requestI
     const headerReq = new sql.Request(tx);
     const headerRes = await headerReq
       .input("NoTransfer", sql.VarChar(20), noTransfer)
-      .query(`SELECT * FROM dbo.GoodTransfer_h WITH (UPDLOCK, HOLDLOCK) WHERE NoTransfer = @NoTransfer`);
+      .query(`SELECT * FROM dbo.GoodsTransfer_h WITH (UPDLOCK, HOLDLOCK) WHERE NoTransfer = @NoTransfer`);
     const header = headerRes.recordset[0];
 
     if (!header) {
@@ -462,12 +462,12 @@ async function cancelGoodTransfer({ noTransfer, actorId, actorUsername, requestI
 
     await new sql.Request(tx)
       .input("NoTransfer", sql.VarChar(20), noTransfer)
-      .query(`UPDATE dbo.GoodTransferItem SET StatusItem = 'CANCELLED', UpdatedAt = GETDATE() WHERE NoTransfer = @NoTransfer`);
+      .query(`UPDATE dbo.GoodsTransferItem SET StatusItem = 'CANCELLED', UpdatedAt = GETDATE() WHERE NoTransfer = @NoTransfer`);
 
     await new sql.Request(tx)
       .input("NoTransfer", sql.VarChar(20), noTransfer)
       .input("IdUsernameCancel", sql.Int, actorId).query(`
-        UPDATE dbo.GoodTransfer_h
+        UPDATE dbo.GoodsTransfer_h
         SET Status = 'CANCELLED', IdUsernameCancel = @IdUsernameCancel, DateTimeCancel = GETDATE(), UpdatedAt = GETDATE()
         WHERE NoTransfer = @NoTransfer
       `);
@@ -484,7 +484,7 @@ async function cancelGoodTransfer({ noTransfer, actorId, actorUsername, requestI
   }
 }
 
-async function rejectGoodTransfer({ noTransfer, alasanTolak, actorId, actorUsername, requestId }) {
+async function rejectGoodsTransfer({ noTransfer, alasanTolak, actorId, actorUsername, requestId }) {
   if (!alasanTolak || !String(alasanTolak).trim()) {
     return { success: false, code: "VALIDATION_ERROR", message: "alasanTolak wajib diisi" };
   }
@@ -502,7 +502,7 @@ async function rejectGoodTransfer({ noTransfer, alasanTolak, actorId, actorUsern
     const headerReq = new sql.Request(tx);
     const headerRes = await headerReq
       .input("NoTransfer", sql.VarChar(20), noTransfer)
-      .query(`SELECT * FROM dbo.GoodTransfer_h WITH (UPDLOCK, HOLDLOCK) WHERE NoTransfer = @NoTransfer`);
+      .query(`SELECT * FROM dbo.GoodsTransfer_h WITH (UPDLOCK, HOLDLOCK) WHERE NoTransfer = @NoTransfer`);
     const header = headerRes.recordset[0];
 
     if (!header) {
@@ -520,13 +520,13 @@ async function rejectGoodTransfer({ noTransfer, alasanTolak, actorId, actorUsern
 
     await new sql.Request(tx)
       .input("NoTransfer", sql.VarChar(20), noTransfer)
-      .query(`UPDATE dbo.GoodTransferItem SET StatusItem = 'REJECTED', UpdatedAt = GETDATE() WHERE NoTransfer = @NoTransfer`);
+      .query(`UPDATE dbo.GoodsTransferItem SET StatusItem = 'REJECTED', UpdatedAt = GETDATE() WHERE NoTransfer = @NoTransfer`);
 
     await new sql.Request(tx)
       .input("NoTransfer", sql.VarChar(20), noTransfer)
       .input("IdUsernameTerima", sql.Int, actorId)
       .input("AlasanTolak", sql.VarChar(500), alasanTolak).query(`
-        UPDATE dbo.GoodTransfer_h
+        UPDATE dbo.GoodsTransfer_h
         SET Status = 'REJECTED', IdUsernameTerima = @IdUsernameTerima, DateTimeTerima = GETDATE(),
             TanggalTerima = CONVERT(date, GETDATE()), AlasanTolak = @AlasanTolak, UpdatedAt = GETDATE()
         WHERE NoTransfer = @NoTransfer
@@ -548,7 +548,7 @@ async function rejectGoodTransfer({ noTransfer, alasanTolak, actorId, actorUsern
  * Accept: commit perpindahan warehouse ke tabel label asli.
  * items: [{ labelCode, blokTujuan, idLokasiTujuan }]
  */
-async function acceptGoodTransfer({ noTransfer, items, actorId, actorUsername, requestId }) {
+async function acceptGoodsTransfer({ noTransfer, items, actorId, actorUsername, requestId }) {
   const itemInputs = Array.isArray(items) ? items : [];
   if (itemInputs.length === 0) {
     return { success: false, code: "VALIDATION_ERROR", message: "items wajib diisi" };
@@ -576,7 +576,7 @@ async function acceptGoodTransfer({ noTransfer, items, actorId, actorUsername, r
     const headerReq = new sql.Request(tx);
     const headerRes = await headerReq
       .input("NoTransfer", sql.VarChar(20), noTransfer)
-      .query(`SELECT * FROM dbo.GoodTransfer_h WITH (UPDLOCK, HOLDLOCK) WHERE NoTransfer = @NoTransfer`);
+      .query(`SELECT * FROM dbo.GoodsTransfer_h WITH (UPDLOCK, HOLDLOCK) WHERE NoTransfer = @NoTransfer`);
     const header = headerRes.recordset[0];
 
     if (!header) {
@@ -594,7 +594,7 @@ async function acceptGoodTransfer({ noTransfer, items, actorId, actorUsername, r
 
     const dbItemsRes = await new sql.Request(tx)
       .input("NoTransfer", sql.VarChar(20), noTransfer)
-      .query(`SELECT * FROM dbo.GoodTransferItem WHERE NoTransfer = @NoTransfer`);
+      .query(`SELECT * FROM dbo.GoodsTransferItem WHERE NoTransfer = @NoTransfer`);
     const dbItems = dbItemsRes.recordset;
 
     const inputByLabel = new Map(itemInputs.map((it) => [it.labelCode, it]));
@@ -628,7 +628,7 @@ async function acceptGoodTransfer({ noTransfer, items, actorId, actorUsername, r
         .input("IdTransferItem", sql.Int, dbItem.IdTransferItem)
         .input("BlokTujuan", sql.VarChar(50), blokTujuan)
         .input("IdLokasiTujuan", sql.Int, idLokasiTujuan).query(`
-          UPDATE dbo.GoodTransferItem
+          UPDATE dbo.GoodsTransferItem
           SET StatusItem = 'RECEIVED', BlokTujuan = @BlokTujuan, IdLokasiTujuan = @IdLokasiTujuan, UpdatedAt = GETDATE()
           WHERE IdTransferItem = @IdTransferItem
         `);
@@ -637,7 +637,7 @@ async function acceptGoodTransfer({ noTransfer, items, actorId, actorUsername, r
     await new sql.Request(tx)
       .input("NoTransfer", sql.VarChar(20), noTransfer)
       .input("IdUsernameTerima", sql.Int, actorId).query(`
-        UPDATE dbo.GoodTransfer_h
+        UPDATE dbo.GoodsTransfer_h
         SET Status = 'RECEIVED', IdUsernameTerima = @IdUsernameTerima, DateTimeTerima = GETDATE(),
             TanggalTerima = CONVERT(date, GETDATE()), UpdatedAt = GETDATE()
         WHERE NoTransfer = @NoTransfer
@@ -693,7 +693,7 @@ async function acceptScannedItem({
 
     const itemRes = await new sql.Request(tx)
       .input("LabelCode", sql.VarChar(50), code).query(`
-        SELECT TOP 1 * FROM dbo.GoodTransferItem WITH (UPDLOCK, HOLDLOCK)
+        SELECT TOP 1 * FROM dbo.GoodsTransferItem WITH (UPDLOCK, HOLDLOCK)
         WHERE LabelCode = @LabelCode AND StatusItem = 'IN_TRANSIT'
       `);
     const item = itemRes.recordset[0];
@@ -703,13 +703,13 @@ async function acceptScannedItem({
       return {
         success: false,
         code: "NOT_IN_TRANSIT",
-        message: `Label ${code} tidak sedang dalam proses penerimaan Good Transfer`,
+        message: `Label ${code} tidak sedang dalam proses penerimaan Goods Transfer`,
       };
     }
 
     const headerRes = await new sql.Request(tx)
       .input("NoTransfer", sql.VarChar(20), item.NoTransfer)
-      .query(`SELECT * FROM dbo.GoodTransfer_h WITH (UPDLOCK, HOLDLOCK) WHERE NoTransfer = @NoTransfer`);
+      .query(`SELECT * FROM dbo.GoodsTransfer_h WITH (UPDLOCK, HOLDLOCK) WHERE NoTransfer = @NoTransfer`);
     const header = headerRes.recordset[0];
 
     if (!header || header.Status !== "IN_TRANSIT") {
@@ -754,14 +754,14 @@ async function acceptScannedItem({
       .input("IdTransferItem", sql.Int, item.IdTransferItem)
       .input("BlokTujuan", sql.VarChar(50), blok)
       .input("IdLokasiTujuan", sql.Int, idLokasi).query(`
-        UPDATE dbo.GoodTransferItem
+        UPDATE dbo.GoodsTransferItem
         SET StatusItem = 'RECEIVED', BlokTujuan = @BlokTujuan, IdLokasiTujuan = @IdLokasiTujuan, UpdatedAt = GETDATE()
         WHERE IdTransferItem = @IdTransferItem
       `);
 
     const remainingRes = await new sql.Request(tx)
       .input("NoTransfer", sql.VarChar(20), item.NoTransfer).query(`
-        SELECT COUNT(*) AS Remaining FROM dbo.GoodTransferItem
+        SELECT COUNT(*) AS Remaining FROM dbo.GoodsTransferItem
         WHERE NoTransfer = @NoTransfer AND StatusItem = 'IN_TRANSIT'
       `);
     const remaining = remainingRes.recordset[0]?.Remaining ?? 0;
@@ -771,7 +771,7 @@ async function acceptScannedItem({
       await new sql.Request(tx)
         .input("NoTransfer", sql.VarChar(20), item.NoTransfer)
         .input("IdUsernameTerima", sql.Int, actorId).query(`
-          UPDATE dbo.GoodTransfer_h
+          UPDATE dbo.GoodsTransfer_h
           SET Status = 'RECEIVED', IdUsernameTerima = @IdUsernameTerima, DateTimeTerima = GETDATE(),
               TanggalTerima = CONVERT(date, GETDATE()), UpdatedAt = GETDATE()
           WHERE NoTransfer = @NoTransfer
@@ -805,13 +805,13 @@ async function acceptScannedItem({
 
 module.exports = {
   inspectLabel,
-  createGoodTransfer,
+  createGoodsTransfer,
   getDetail,
   listAll,
   listOutgoing,
   listIncoming,
-  cancelGoodTransfer,
-  rejectGoodTransfer,
-  acceptGoodTransfer,
+  cancelGoodsTransfer,
+  rejectGoodsTransfer,
+  acceptGoodsTransfer,
   acceptScannedItem,
 };

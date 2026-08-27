@@ -9,4 +9,7 @@ const ctrl = require("./master-warehouse-controller");
 // Query: ?includeDisabled=1&q=inje&orderBy=NamaWarehouse&orderDir=ASC
 router.get("/warehouse", verifyToken, ctrl.list);
 
+// Set / lepas group (site) sebuah warehouse. Body: { idWarehouseGroup: <int|null> }
+router.put("/warehouse/:idWarehouse/group", verifyToken, ctrl.setGroup);
+
 module.exports = router;

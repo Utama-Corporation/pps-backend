@@ -19,6 +19,11 @@ const TUTUP_TRANSAKSI_SOURCES = {
     codeColumn: "NoPenerimaan",
     dateColumn: "TglPenerimaan",
   },
+  penerimaanBarangDagang: {
+    table: "dbo.PenerimaanBarangDagang_h",
+    codeColumn: "NoPenerimaan",
+    dateColumn: "TglPenerimaan",
+  },
   brokerProduksi: {
     table: "dbo.BrokerProduksi_h",
     codeColumn: "NoProduksi",

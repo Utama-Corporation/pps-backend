@@ -104,33 +104,7 @@ function validateHeaderPayload(payload) {
     throw badReq("idTim wajib diisi");
   }
 
-  const shift = Number(payload?.shift);
-  if (!Number.isInteger(shift) || shift <= 0) {
-    throw badReq("shift wajib diisi");
-  }
-
-  const hourStart = String(payload?.hourStart || "").trim();
-  if (!hourStart) {
-    throw badReq("hourStart wajib diisi");
-  }
-
-  const hourEnd = String(payload?.hourEnd || "").trim();
-  if (!hourEnd) {
-    throw badReq("hourEnd wajib diisi");
-  }
-
-  const idOperators = [
-    ...new Set(
-      (Array.isArray(payload?.idOperators) ? payload.idOperators : [])
-        .map((v) => Number(v))
-        .filter((n) => Number.isInteger(n) && n > 0),
-    ),
-  ];
-  if (idOperators.length === 0) {
-    throw badReq("idOperators wajib diisi minimal 1 operator");
-  }
-
-  return { tglPenerimaan, idTim, shift, hourStart, hourEnd, idOperators };
+  return { tglPenerimaan, idTim };
 }
 
 function validateAddPalletsPayload(payload) {
@@ -229,7 +203,7 @@ async function createHeaderPenerimaanBahanBaku(payload, ctx) {
     const noPenerimaan = await generateUniqueCode(tx, {
       tableName: "dbo.PenerimaanBahanBaku_h",
       columnName: "NoPenerimaan",
-      prefix: "R.",
+      prefix: "PB.",
       width: 10,
     });
 
@@ -237,34 +211,13 @@ async function createHeaderPenerimaanBahanBaku(payload, ctx) {
       .input("NoPenerimaan", sql.VarChar(20), noPenerimaan)
       .input("TglPenerimaan", sql.Date, v.tglPenerimaan)
       .input("IdTim", sql.Int, v.idTim)
-      .input("Shift", sql.Int, v.shift)
-      .input("HourStart", sql.VarChar(20), v.hourStart)
-      .input("HourEnd", sql.VarChar(20), v.hourEnd)
       .input("CreateBy", sql.VarChar(100), actorUsername || null)
       .query(`
         INSERT INTO dbo.PenerimaanBahanBaku_h
-          (NoPenerimaan, TglPenerimaan, IdTim, Shift, HourStart, HourEnd, CreateBy)
+          (NoPenerimaan, TglPenerimaan, IdTim, CreateBy)
         VALUES
-          (
-            @NoPenerimaan, @TglPenerimaan, @IdTim,
-            @Shift,
-            CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL ELSE CAST(@HourStart AS time(7)) END,
-            CASE WHEN @HourEnd IS NULL OR LTRIM(RTRIM(@HourEnd)) = '' THEN NULL ELSE CAST(@HourEnd AS time(7)) END,
-            @CreateBy
-          )
+          (@NoPenerimaan, @TglPenerimaan, @IdTim, @CreateBy)
       `);
-
-    const rqOp = new sql.Request(tx);
-    rqOp.input("NoPenerimaan", sql.VarChar(20), noPenerimaan);
-    const opValues = v.idOperators.map((opId, i) => {
-      const p = `Op${i}`;
-      rqOp.input(p, sql.Int, opId);
-      return `(@NoPenerimaan, @${p})`;
-    });
-    await rqOp.query(`
-      INSERT INTO dbo.PenerimaanBahanBakuOperator_d (NoPenerimaan, IdOperator)
-      VALUES ${opValues.join(", ")};
-    `);
 
     await tx.commit();
 
@@ -272,10 +225,6 @@ async function createHeaderPenerimaanBahanBaku(payload, ctx) {
       noPenerimaan,
       tglPenerimaan: v.tglPenerimaan,
       idTim: v.idTim,
-      idOperators: v.idOperators,
-      shift: v.shift,
-      hourStart: v.hourStart,
-      hourEnd: v.hourEnd,
       audit: { actorId: audit.actorId, requestId: audit.requestId },
     };
   } catch (err) {
@@ -544,16 +493,13 @@ async function listPenerimaanBahanBaku({ page = 1, pageSize = 20, filter = "", k
       CONVERT(varchar(10), h.TglPenerimaan, 23) AS TglPenerimaan,
       h.IdTim,
       t.NamaTim,
-      opAgg.IdOperators,
-      opAgg.NamaOperators,
       bb.IdSupplier,
       sup.NmSupplier AS NamaSupplier,
       bb.NoPlat,
-      h.Shift,
-      CONVERT(VARCHAR(8), h.HourStart, 108) AS HourStart,
-      CONVERT(VARCHAR(8), h.HourEnd, 108) AS HourEnd,
       h.CreateBy,
       h.DateTimeCreate,
+      h.IsComplete,
+      h.TglComplete,
       bb.NoBahanBaku,
       agg.JumlahPallet,
       agg.TotalBerat
@@ -561,22 +507,6 @@ async function listPenerimaanBahanBaku({ page = 1, pageSize = 20, filter = "", k
     LEFT JOIN BB bb ON bb.NoPenerimaan = h.NoPenerimaan AND bb.rn = 1
     LEFT JOIN dbo.MstSupplier sup WITH (NOLOCK) ON sup.IdSupplier = bb.IdSupplier
     LEFT JOIN dbo.MstTimPenerimaan t WITH (NOLOCK) ON t.IdTim = h.IdTim AND t.TipeModul = 'BAHAN_BAKU'
-    OUTER APPLY (
-      SELECT
-        JSON_QUERY(COALESCE(
-          (SELECT od.IdOperator AS [value]
-           FROM dbo.PenerimaanBahanBakuOperator_d od WITH (NOLOCK)
-           WHERE od.NoPenerimaan = h.NoPenerimaan
-           FOR JSON PATH), '[]'
-        )) AS IdOperators,
-        STUFF((
-          SELECT ', ' + mo.NamaOperator
-          FROM dbo.PenerimaanBahanBakuOperator_d od WITH (NOLOCK)
-          INNER JOIN dbo.MstOperator mo WITH (NOLOCK) ON mo.IdOperator = od.IdOperator
-          WHERE od.NoPenerimaan = h.NoPenerimaan
-          FOR XML PATH('')
-        ), 1, 2, '') AS NamaOperators
-    ) opAgg
     OUTER APPLY (
       SELECT
         COUNT(DISTINCT o.NoPallet) AS JumlahPallet,
@@ -605,31 +535,12 @@ async function getDetailPenerimaanBahanBaku(noPenerimaan) {
       CONVERT(varchar(10), h.TglPenerimaan, 23) AS TglPenerimaan,
       h.IdTim,
       t.NamaTim,
-      opAgg.IdOperators,
-      opAgg.NamaOperators,
-      h.Shift,
-      CONVERT(VARCHAR(8), h.HourStart, 108) AS HourStart,
-      CONVERT(VARCHAR(8), h.HourEnd, 108) AS HourEnd,
       h.CreateBy,
-      h.DateTimeCreate
+      h.DateTimeCreate,
+      h.IsComplete,
+      h.TglComplete
     FROM dbo.PenerimaanBahanBaku_h h
     LEFT JOIN dbo.MstTimPenerimaan t ON t.IdTim = h.IdTim AND t.TipeModul = 'BAHAN_BAKU'
-    OUTER APPLY (
-      SELECT
-        JSON_QUERY(COALESCE(
-          (SELECT od.IdOperator AS [value]
-           FROM dbo.PenerimaanBahanBakuOperator_d od
-           WHERE od.NoPenerimaan = h.NoPenerimaan
-           FOR JSON PATH), '[]'
-        )) AS IdOperators,
-        STUFF((
-          SELECT ', ' + mo.NamaOperator
-          FROM dbo.PenerimaanBahanBakuOperator_d od
-          INNER JOIN dbo.MstOperator mo ON mo.IdOperator = od.IdOperator
-          WHERE od.NoPenerimaan = h.NoPenerimaan
-          FOR XML PATH('')
-        ), 1, 2, '') AS NamaOperators
-    ) opAgg
     WHERE h.NoPenerimaan = @NoPenerimaan
   `);
 
@@ -768,11 +679,44 @@ async function deletePenerimaanBahanBaku(noPenerimaan, ctx) {
 }
 
 // ==========================================
+//  TANDAI SELESAI (IsComplete = 1)
+//  PATCH /api/penerimaan-bahan-baku/:noPenerimaan/complete
+// ==========================================
+async function completePenerimaanBahanBaku(noPenerimaan, ctx) {
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+
+  try {
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+    await applyAuditContext(new sql.Request(tx), ctx || {});
+
+    const result = await new sql.Request(tx)
+      .input("NoPenerimaan", sql.VarChar(20), String(noPenerimaan))
+      .query(`
+        UPDATE dbo.PenerimaanBahanBaku_h
+        SET IsComplete = 1, TglComplete = GETDATE()
+        WHERE NoPenerimaan = @NoPenerimaan
+      `);
+
+    if (result.rowsAffected[0] === 0) {
+      throw notFound("PenerimaanBahanBaku tidak ditemukan");
+    }
+
+    await tx.commit();
+    return true;
+  } catch (err) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw err;
+  }
+}
+
+// ==========================================
 //  STATUS TIM (untuk grid ala mesin washing)
-//  Analog GET /api/mst-mesin/washing: satu baris = satu tim, dengan info
-//  NoPenerimaan yang dibuat HARI INI (jika ada, berdasarkan tanggal & jam
-//  di header — persis pola WashingProduksi_h). Tim tanpa NoPenerimaan hari
-//  ini dianggap "belum aktif" di layar tablet.
+//  Tim dianggap aktif selama masih ada NoPenerimaan yang BELUM
+//  diselesaikan (IsComplete = 0), tidak dibatasi tanggal hari ini lagi
+//  (mirror pola penerimaan-bahan-pendukung-service.js#getTimStatus).
 // ==========================================
 async function getTimStatus() {
   const pool = await poolPromise;
@@ -783,24 +727,14 @@ async function getTimStatus() {
       t.Aktif,
       today.NoPenerimaan,
       CONVERT(varchar(10), today.TglPenerimaan, 23) AS TglPenerimaan,
-      today.Shift,
-      CONVERT(VARCHAR(8), today.HourStart, 108) AS HourStart,
-      CONVERT(VARCHAR(8), today.HourEnd, 108) AS HourEnd,
-      today.NamaOperators
+      ISNULL(today.IsComplete, 0) AS IsComplete
     FROM dbo.MstTimPenerimaan t WITH (NOLOCK)
     OUTER APPLY (
       SELECT TOP 1
-        h.NoPenerimaan, h.TglPenerimaan, h.Shift, h.HourStart, h.HourEnd,
-        STUFF((
-          SELECT ', ' + mo.NamaOperator
-          FROM dbo.PenerimaanBahanBakuOperator_d od WITH (NOLOCK)
-          INNER JOIN dbo.MstOperator mo WITH (NOLOCK) ON mo.IdOperator = od.IdOperator
-          WHERE od.NoPenerimaan = h.NoPenerimaan
-          FOR XML PATH('')
-        ), 1, 2, '') AS NamaOperators
+        h.NoPenerimaan, h.TglPenerimaan, h.IsComplete
       FROM dbo.PenerimaanBahanBaku_h h WITH (NOLOCK)
       WHERE h.IdTim = t.IdTim
-        AND CONVERT(date, h.TglPenerimaan) = CONVERT(date, GETDATE())
+        AND h.IsComplete = 0
       ORDER BY h.DateTimeCreate DESC
     ) today
     WHERE t.TipeModul = 'BAHAN_BAKU'
@@ -816,5 +750,6 @@ module.exports = {
   listPenerimaanBahanBaku,
   getDetailPenerimaanBahanBaku,
   deletePenerimaanBahanBaku,
+  completePenerimaanBahanBaku,
   getTimStatus,
 };

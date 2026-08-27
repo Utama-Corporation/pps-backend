@@ -114,28 +114,11 @@ async function getMasterCabinetMaterials({ idWarehouse }) {
       WHERE Z.Tanggal >= K.TglSaldoAwal AND Z.Tanggal <= @TglAkhir
       GROUP BY Z.IdCabinetMaterial, K.IdWarehouse
     ),
-    F AS (
-      -- Goods Transfer In
-      SELECT d.IdCabinetMaterial, h.IdWhTujuan AS IdWarehouse, SUM(ISNULL(d.Pcs, 0)) AS GoodTrfIn
-      FROM dbo.GoodsTransfer_d_CabinetMaterial d WITH (NOLOCK)
-      INNER JOIN dbo.GoodsTransfer_h h WITH (NOLOCK)
-        ON h.NoGT = d.NoGT
-      INNER JOIN K ON K.IdCabinetMaterial = d.IdCabinetMaterial
-       AND K.IdWarehouse = h.IdWhTujuan
-      WHERE h.DateCreate >= K.TglSaldoAwal AND h.DateCreate <= @TglAkhir
-      GROUP BY d.IdCabinetMaterial, h.IdWhTujuan
-    ),
-    G AS (
-      -- Goods Transfer Out
-      SELECT d.IdCabinetMaterial, h.IdWhAsal AS IdWarehouse, SUM(ISNULL(d.Pcs, 0)) AS GoodTrfOut
-      FROM dbo.GoodsTransfer_d_CabinetMaterial d WITH (NOLOCK)
-      INNER JOIN dbo.GoodsTransfer_h h WITH (NOLOCK)
-        ON h.NoGT = d.NoGT
-      INNER JOIN K ON K.IdCabinetMaterial = d.IdCabinetMaterial
-       AND K.IdWarehouse = h.IdWhAsal
-      WHERE h.DateCreate >= K.TglSaldoAwal AND h.DateCreate <= @TglAkhir
-      GROUP BY d.IdCabinetMaterial, h.IdWhAsal
-    ),
+    -- NOTE: CTE "Goods Transfer In/Out" dihapus. Tabel legacy
+    -- dbo.GoodsTransfer_d_CabinetMaterial di-drop permanen oleh migration
+    -- V20260827120000__rename_good_transfer_to_goods_transfer.sql. Fitur Goods
+    -- Transfer baru berbasis label fisik dan tidak menangani Cabinet Material,
+    -- sehingga tidak ada komponen transfer In/Out untuk saldo material ini.
     H AS (
       -- Inject Produksi Material
       SELECT d.IdCabinetMaterial, K.IdWarehouse, SUM(ISNULL(d.Pcs, 0)) AS InjectProdMaterl
@@ -182,8 +165,8 @@ async function getMasterCabinetMaterials({ idWarehouse }) {
       ISNULL(C.BJualMaterl, 0) AS BJualMaterl,
       ISNULL(D.ReturMaterl, 0) AS ReturMaterl,
       ISNULL(E.CabAssblMaterl, 0) AS CabAssblMaterl,
-      ISNULL(F.GoodTrfIn, 0) AS GoodTrfIn,
-      ISNULL(G.GoodTrfOut, 0) AS GoodTrfOut,
+      0 AS GoodTrfIn,
+      0 AS GoodTrfOut,
       ISNULL(H.InjectProdMaterl, 0) AS InjectProdMaterl,
       ISNULL(I.AdjInput, 0) AS AdjInput,
       ISNULL(J.AdjOutput, 0) AS AdjOutput,
@@ -193,8 +176,6 @@ async function getMasterCabinetMaterials({ idWarehouse }) {
         - ISNULL(C.BJualMaterl, 0)
         + ISNULL(D.ReturMaterl, 0)
         - ISNULL(E.CabAssblMaterl, 0)
-        + ISNULL(F.GoodTrfIn, 0)
-        - ISNULL(G.GoodTrfOut, 0)
         - ISNULL(H.InjectProdMaterl, 0)
         - ISNULL(I.AdjInput, 0)
         + ISNULL(J.AdjOutput, 0)
@@ -205,8 +186,6 @@ async function getMasterCabinetMaterials({ idWarehouse }) {
     LEFT JOIN C ON C.IdCabinetMaterial = a.IdCabinetMaterial AND C.IdWarehouse = K.IdWarehouse
     LEFT JOIN D ON D.IdCabinetMaterial = a.IdCabinetMaterial AND D.IdWarehouse = K.IdWarehouse
     LEFT JOIN E ON E.IdCabinetMaterial = a.IdCabinetMaterial AND E.IdWarehouse = K.IdWarehouse
-    LEFT JOIN F ON F.IdCabinetMaterial = a.IdCabinetMaterial AND F.IdWarehouse = K.IdWarehouse
-    LEFT JOIN G ON G.IdCabinetMaterial = a.IdCabinetMaterial AND G.IdWarehouse = K.IdWarehouse
     LEFT JOIN H ON H.IdCabinetMaterial = a.IdCabinetMaterial AND H.IdWarehouse = K.IdWarehouse
     LEFT JOIN I ON I.IdCabinetMaterial = a.IdCabinetMaterial AND I.IdWarehouse = K.IdWarehouse
     LEFT JOIN J ON J.IdCabinetMaterial = a.IdCabinetMaterial AND J.IdWarehouse = K.IdWarehouse

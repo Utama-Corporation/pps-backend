@@ -3,16 +3,16 @@ GO
 SET QUOTED_IDENTIFIER ON;
 GO
 
-/* ===== [dbo].[tr_Audit_PenerimaanBahanBaku_h] ON [dbo].[PenerimaanBahanBaku_h] ===== */
+/* ===== [dbo].[tr_Audit_PenerimaanBarangDagang_h] ON [dbo].[PenerimaanBarangDagang_h] ===== */
 -- =============================================
--- TRIGGER: tr_Audit_PenerimaanBahanBaku_h
+-- TRIGGER: tr_Audit_PenerimaanBarangDagang_h
 -- AFTER INSERT, UPDATE, DELETE
 -- Actor: SESSION_CONTEXT('actor_id') fallback SESSION_CONTEXT('actor') fallback SUSER_SNAME()
 -- RequestId: SESSION_CONTEXT('request_id')
 -- PK: {"NoPenerimaan":"..."}
 -- =============================================
-CREATE OR ALTER TRIGGER [dbo].[tr_Audit_PenerimaanBahanBaku_h]
-ON [dbo].[PenerimaanBahanBaku_h]
+CREATE OR ALTER TRIGGER [dbo].[tr_Audit_PenerimaanBarangDagang_h]
+ON [dbo].[PenerimaanBarangDagang_h]
 AFTER INSERT, UPDATE, DELETE
 AS
 BEGIN
@@ -35,7 +35,7 @@ BEGIN
         (Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
         'INSERT',
-        'PenerimaanBahanBaku_h',
+        'PenerimaanBarangDagang_h',
         @actor,
         @rid,
         CONCAT('{"NoPenerimaan":"', i.NoPenerimaan, '"}'),
@@ -45,9 +45,8 @@ BEGIN
                 i.NoPenerimaan,
                 i.TglPenerimaan,
                 i.IdTim,
-                i.CreateBy,
-                i.DateTimeCreate,
                 i.IsComplete,
+                i.CreateBy,
                 i.TglComplete
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         )
@@ -62,7 +61,7 @@ BEGIN
         (Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
         'UPDATE',
-        'PenerimaanBahanBaku_h',
+        'PenerimaanBarangDagang_h',
         @actor,
         @rid,
         CONCAT('{"NoPenerimaan":"', i.NoPenerimaan, '"}'),
@@ -71,9 +70,8 @@ BEGIN
                 d.NoPenerimaan,
                 d.TglPenerimaan,
                 d.IdTim,
-                d.CreateBy,
-                d.DateTimeCreate,
                 d.IsComplete,
+                d.CreateBy,
                 d.TglComplete
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         ),
@@ -82,9 +80,8 @@ BEGIN
                 i.NoPenerimaan,
                 i.TglPenerimaan,
                 i.IdTim,
-                i.CreateBy,
-                i.DateTimeCreate,
                 i.IsComplete,
+                i.CreateBy,
                 i.TglComplete
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         )
@@ -98,7 +95,7 @@ BEGIN
         (Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
         'DELETE',
-        'PenerimaanBahanBaku_h',
+        'PenerimaanBarangDagang_h',
         @actor,
         @rid,
         CONCAT('{"NoPenerimaan":"', d.NoPenerimaan, '"}'),
@@ -107,9 +104,8 @@ BEGIN
                 d.NoPenerimaan,
                 d.TglPenerimaan,
                 d.IdTim,
-                d.CreateBy,
-                d.DateTimeCreate,
                 d.IsComplete,
+                d.CreateBy,
                 d.TglComplete
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         ),

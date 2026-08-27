@@ -15,5 +15,7 @@ router.post("/", verifyToken, ctrl.createHeader);
 // >1x per NoPenerimaan (1x per section Bahan Baku Pakai/Proses).
 router.post("/:noPenerimaan/pallets", verifyToken, ctrl.addPallets);
 router.delete("/:noPenerimaan", verifyToken, ctrl.remove);
+// Tandai penerimaan sebagai selesai (IsComplete = 1).
+router.patch("/:noPenerimaan/complete", verifyToken, ctrl.complete);
 
 module.exports = router;

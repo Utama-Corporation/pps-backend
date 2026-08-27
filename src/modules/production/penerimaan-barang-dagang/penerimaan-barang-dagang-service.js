@@ -1,21 +1,19 @@
-// penerimaan-bahan-pendukung-service.js
+// penerimaan-barang-dagang-service.js
 //
-// Mengikuti pola penerimaan-bahan-baku-service.js (2 fase: create header lalu
-// add items), TAPI disederhanakan sesuai kebutuhan bahan pendukung:
-//   - Tidak ada struktur pallet/sak — barang pendukung (baut/pipa/plat/dll)
-//     dihitung PCS, jadi tiap baris "item" LANGSUNG jadi 1 baris
-//     dbo.BahanPendukung (IdCabinetMaterial + Qty), tanpa breakdown.
-//     PenerimaanBahanPendukung_d HANYA pengikat tipis (NoPenerimaan,
-//     NoBahanPendukung — PK di NoBahanPendukung sendiri, karena sudah unik
-//     1:1) antara header dan baris BahanPendukung yang dihasilkannya.
+// Mirror pola penerimaan-bahan-pendukung-service.js (2 fase: create header
+// lalu add items), disesuaikan untuk barang dagang:
+//   - Tidak ada struktur pallet/sak — barang dagang dihitung PCS, jadi tiap
+//     baris "item" LANGSUNG jadi 1 baris dbo.BarangDagang (IdBarangDagang +
+//     Qty), tanpa breakdown. PenerimaanBarangDagang_d HANYA pengikat tipis
+//     (NoPenerimaan, NoBarangDagang — PK di NoBarangDagang sendiri, karena
+//     sudah unik 1:1) antara header dan baris BarangDagang yang
+//     dihasilkannya.
 //   - Tidak ada IdWarehouse — modul ini tidak melacak lokasi gudang sama
-//     sekali (beda dengan FurnitureWIP).
+//     sekali.
 //   - Tidak ada kategori/prefix label seperti bahan baku (Pakai/Proses) —
-//     satu kategori saja, jadi tidak perlu resolveKategoriPrefix ataupun
-//     multi-kategori per section.
-//   - Tim dari tabel GLOBAL dbo.MstTimPenerimaan (bukan MstTimPenerimaanBB
-//     yang khusus bahan baku) — supaya bisa dipakai ulang modul penerimaan
-//     lain di masa depan.
+//     satu kategori saja.
+//   - Tim dari tabel GLOBAL dbo.MstTimPenerimaan (filter
+//     TipeModul='BARANG_DAGANG'), dipakai ulang lintas modul penerimaan.
 const { sql, poolPromise } = require("../../../core/config/db");
 const { generateNextCode } = require("../../../core/utils/sequence-code-helper");
 const { badReq, notFound, conflict } = require("../../../core/utils/http-error");
@@ -25,8 +23,8 @@ const {
   loadDocDateOnlyFromConfig,
   toDateOnly,
 } = require("../../../core/shared/tutup-transaksi-guard");
-const bahanPendukungReadRepo = require("../../label/bahan-pendukung/repositories/bahan-pendukung-read.repository");
-const bahanPendukungWriteRepo = require("../../label/bahan-pendukung/repositories/bahan-pendukung-write.repository");
+const barangDagangReadRepo = require("../../label/barang-dagang/repositories/barang-dagang-read.repository");
+const barangDagangWriteRepo = require("../../label/barang-dagang/repositories/barang-dagang-write.repository");
 
 function validateHeaderPayload(payload) {
   const tglPenerimaan = String(payload?.tglPenerimaan || "").trim();
@@ -53,9 +51,9 @@ function normalizeItems(items) {
       throw badReq(`items[${i}].idSupplier wajib diisi`);
     }
 
-    const idCabinetMaterial = Number(it?.idCabinetMaterial);
-    if (!Number.isInteger(idCabinetMaterial) || idCabinetMaterial <= 0) {
-      throw badReq(`items[${i}].idCabinetMaterial wajib diisi (dipakai untuk generate label)`);
+    const idBarangDagang = Number(it?.idBarangDagang);
+    if (!Number.isInteger(idBarangDagang) || idBarangDagang <= 0) {
+      throw badReq(`items[${i}].idBarangDagang wajib diisi (dipakai untuk generate label)`);
     }
 
     const qty = Number(it?.qty);
@@ -65,7 +63,7 @@ function normalizeItems(items) {
 
     const keterangan = it?.keterangan != null ? String(it.keterangan).trim() || null : null;
 
-    return { idSupplier, idCabinetMaterial, qty, keterangan };
+    return { idSupplier, idBarangDagang, qty, keterangan };
   });
 }
 
@@ -91,7 +89,7 @@ async function generateUniqueCode(tx, opts) {
 async function assertTimAktif(tx, idTim) {
   const result = await new sql.Request(tx)
     .input("IdTim", sql.Int, idTim)
-    .query(`SELECT Aktif FROM dbo.MstTimPenerimaan WHERE IdTim = @IdTim AND TipeModul = 'BAHAN_PENDUKUNG'`);
+    .query(`SELECT Aktif FROM dbo.MstTimPenerimaan WHERE IdTim = @IdTim AND TipeModul = 'BARANG_DAGANG'`);
 
   const row = result.recordset[0];
   if (!row) {
@@ -103,10 +101,10 @@ async function assertTimAktif(tx, idTim) {
 }
 
 // ==========================================
-//  FASE 1: CREATE HEADER (analog PenerimaanBahanBaku_h create)
-//  POST /api/penerimaan-bahan-pendukung
+//  FASE 1: CREATE HEADER (analog PenerimaanBahanPendukung_h create)
+//  POST /api/penerimaan-barang-dagang
 // ==========================================
-async function createHeaderPenerimaanBahanPendukung(payload, ctx) {
+async function createHeaderPenerimaanBarangDagang(payload, ctx) {
   const v = validateHeaderPayload(payload);
   const { actorId, actorUsername, requestId } = ctx || {};
 
@@ -130,14 +128,14 @@ async function createHeaderPenerimaanBahanPendukung(payload, ctx) {
     await assertNotLocked({
       date: docDateOnly,
       runner: tx,
-      action: "create PenerimaanBahanPendukung (header)",
+      action: "create PenerimaanBarangDagang (header)",
       useLock: true,
     });
 
     await assertTimAktif(tx, v.idTim);
 
     const noPenerimaan = await generateUniqueCode(tx, {
-      tableName: "dbo.PenerimaanBahanPendukung_h",
+      tableName: "dbo.PenerimaanBarangDagang_h",
       columnName: "NoPenerimaan",
       prefix: "PP.",
       width: 10,
@@ -149,7 +147,7 @@ async function createHeaderPenerimaanBahanPendukung(payload, ctx) {
       .input("IdTim", sql.Int, v.idTim)
       .input("CreateBy", sql.VarChar(100), actorUsername || null)
       .query(`
-        INSERT INTO dbo.PenerimaanBahanPendukung_h
+        INSERT INTO dbo.PenerimaanBarangDagang_h
           (NoPenerimaan, TglPenerimaan, IdTim, CreateBy)
         VALUES
           (@NoPenerimaan, @TglPenerimaan, @IdTim, @CreateBy)
@@ -173,10 +171,10 @@ async function createHeaderPenerimaanBahanPendukung(payload, ctx) {
 
 // ==========================================
 //  FASE 2: ADD ITEMS ke NoPenerimaan yang SUDAH ADA
-//  POST /api/penerimaan-bahan-pendukung/:noPenerimaan/items
+//  POST /api/penerimaan-barang-dagang/:noPenerimaan/items
 //  Boleh dipanggil >1x untuk NoPenerimaan yang sama.
 // ==========================================
-async function addItemsPenerimaanBahanPendukung(noPenerimaan, payload, ctx) {
+async function addItemsPenerimaanBarangDagang(noPenerimaan, payload, ctx) {
   const items = normalizeItems(payload?.items);
   const { actorId, actorUsername, requestId } = ctx || {};
 
@@ -200,51 +198,50 @@ async function addItemsPenerimaanBahanPendukung(noPenerimaan, payload, ctx) {
       .input("NoPenerimaan", sql.VarChar(20), String(noPenerimaan))
       .query(`
         SELECT NoPenerimaan, TglPenerimaan
-        FROM dbo.PenerimaanBahanPendukung_h WITH (UPDLOCK, HOLDLOCK)
+        FROM dbo.PenerimaanBarangDagang_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoPenerimaan = @NoPenerimaan
       `);
     const header = headerRows.recordset[0];
     if (!header) {
-      throw notFound(`PenerimaanBahanPendukung dengan NoPenerimaan ${noPenerimaan} tidak ditemukan`);
+      throw notFound(`PenerimaanBarangDagang dengan NoPenerimaan ${noPenerimaan} tidak ditemukan`);
     }
 
     const docDateOnly = toDateOnly(header.TglPenerimaan);
     await assertNotLocked({
       date: docDateOnly,
       runner: tx,
-      action: "add items PenerimaanBahanPendukung",
+      action: "add items PenerimaanBarangDagang",
       useLock: true,
     });
 
-    // Setiap item langsung menghasilkan 1 baris dbo.BahanPendukung (barang +
-    // atribut label sekaligus), lalu PenerimaanBahanPendukung_d cuma
-    // mengikat NoPenerimaan ke NoBahanPendukung itu — dalam transaksi yang
-    // sama, mengikuti pola create-furniture-wip.handler.js.
+    // Setiap item langsung menghasilkan 1 baris dbo.BarangDagang (barang +
+    // atribut label sekaligus), lalu PenerimaanBarangDagang_d cuma mengikat
+    // NoPenerimaan ke NoBarangDagang itu — dalam transaksi yang sama.
     const nowDateTime = new Date();
 
     const createdItems = [];
     for (const item of items) {
       const genCode = () =>
         generateNextCode(tx, {
-          tableName: "dbo.BahanPendukung",
-          columnName: "NoBahanPendukung",
-          prefix: "BP.",
+          tableName: "dbo.BarangDagang",
+          columnName: "NoBarangDagang",
+          prefix: "BD.",
           width: 10,
         });
 
-      let noBahanPendukung = await genCode();
-      if (await bahanPendukungReadRepo.isNoBahanPendukungExists(tx, noBahanPendukung)) {
-        noBahanPendukung = await genCode();
-        if (await bahanPendukungReadRepo.isNoBahanPendukungExists(tx, noBahanPendukung)) {
-          throw conflict("Gagal generate NoBahanPendukung unik, coba lagi");
+      let noBarangDagang = await genCode();
+      if (await barangDagangReadRepo.isNoBarangDagangExists(tx, noBarangDagang)) {
+        noBarangDagang = await genCode();
+        if (await barangDagangReadRepo.isNoBarangDagangExists(tx, noBarangDagang)) {
+          throw conflict("Gagal generate NoBarangDagang unik, coba lagi");
         }
       }
 
-      await bahanPendukungWriteRepo.insertBahanPendukungHeader(tx, {
-        noBahanPendukung,
+      await barangDagangWriteRepo.insertBarangDagangHeader(tx, {
+        noBarangDagang,
         header: {
           IdSupplier: item.idSupplier,
-          IdCabinetMaterial: item.idCabinetMaterial,
+          IdBarangDagang: item.idBarangDagang,
           Qty: item.qty,
           Keterangan: item.keterangan,
           CreateBy: actorUsername || null,
@@ -254,16 +251,16 @@ async function addItemsPenerimaanBahanPendukung(noPenerimaan, payload, ctx) {
 
       await new sql.Request(tx)
         .input("NoPenerimaan", sql.VarChar(20), String(noPenerimaan))
-        .input("NoBahanPendukung", sql.VarChar(50), noBahanPendukung)
+        .input("NoBarangDagang", sql.VarChar(50), noBarangDagang)
         .input("CreateBy", sql.VarChar(100), actorUsername || null)
         .query(`
-          INSERT INTO dbo.PenerimaanBahanPendukung_d
-            (NoPenerimaan, NoBahanPendukung, CreateBy)
+          INSERT INTO dbo.PenerimaanBarangDagang_d
+            (NoPenerimaan, NoBarangDagang, CreateBy)
           VALUES
-            (@NoPenerimaan, @NoBahanPendukung, @CreateBy)
+            (@NoPenerimaan, @NoBarangDagang, @CreateBy)
         `);
 
-      createdItems.push({ noPenerimaan: String(noPenerimaan), noBahanPendukung, ...item });
+      createdItems.push({ noPenerimaan: String(noPenerimaan), noBarangDagang, ...item });
     }
 
     await tx.commit();
@@ -281,7 +278,7 @@ async function addItemsPenerimaanBahanPendukung(noPenerimaan, payload, ctx) {
   }
 }
 
-async function listPenerimaanBahanPendukung({ page = 1, pageSize = 20, filter = "" } = {}) {
+async function listPenerimaanBarangDagang({ page = 1, pageSize = 20, filter = "" } = {}) {
   const pool = await poolPromise;
 
   const p = Math.max(1, Number(page) || 1);
@@ -301,8 +298,8 @@ async function listPenerimaanBahanPendukung({ page = 1, pageSize = 20, filter = 
   countReq.input("Filter", sql.VarChar(100), filterTerm);
   const countRes = await countReq.query(`
     SELECT COUNT(1) AS total
-    FROM dbo.PenerimaanBahanPendukung_h h WITH (NOLOCK)
-    LEFT JOIN dbo.MstTimPenerimaan t WITH (NOLOCK) ON t.IdTim = h.IdTim AND t.TipeModul = 'BAHAN_PENDUKUNG'
+    FROM dbo.PenerimaanBarangDagang_h h WITH (NOLOCK)
+    LEFT JOIN dbo.MstTimPenerimaan t WITH (NOLOCK) ON t.IdTim = h.IdTim AND t.TipeModul = 'BARANG_DAGANG'
     ${whereClause};
   `);
   const total = countRes.recordset?.[0]?.total || 0;
@@ -323,14 +320,14 @@ async function listPenerimaanBahanPendukung({ page = 1, pageSize = 20, filter = 
       h.TglComplete,
       agg.JumlahItem,
       agg.TotalQty
-    FROM dbo.PenerimaanBahanPendukung_h h WITH (NOLOCK)
-    LEFT JOIN dbo.MstTimPenerimaan t WITH (NOLOCK) ON t.IdTim = h.IdTim AND t.TipeModul = 'BAHAN_PENDUKUNG'
+    FROM dbo.PenerimaanBarangDagang_h h WITH (NOLOCK)
+    LEFT JOIN dbo.MstTimPenerimaan t WITH (NOLOCK) ON t.IdTim = h.IdTim AND t.TipeModul = 'BARANG_DAGANG'
     OUTER APPLY (
       SELECT
         COUNT(1) AS JumlahItem,
-        SUM(ISNULL(bp.Qty, 0)) AS TotalQty
-      FROM dbo.PenerimaanBahanPendukung_d dd
-      INNER JOIN dbo.BahanPendukung bp ON bp.NoBahanPendukung = dd.NoBahanPendukung
+        SUM(ISNULL(bd.Qty, 0)) AS TotalQty
+      FROM dbo.PenerimaanBarangDagang_d dd
+      INNER JOIN dbo.BarangDagang bd ON bd.NoBarangDagang = dd.NoBarangDagang
       WHERE dd.NoPenerimaan = h.NoPenerimaan
     ) agg
     ${whereClause}
@@ -341,7 +338,7 @@ async function listPenerimaanBahanPendukung({ page = 1, pageSize = 20, filter = 
   return { data: dataRes.recordset || [], total };
 }
 
-async function getDetailPenerimaanBahanPendukung(noPenerimaan) {
+async function getDetailPenerimaanBarangDagang(noPenerimaan) {
   const pool = await poolPromise;
   const request = pool.request();
   request.input("NoPenerimaan", sql.VarChar(20), String(noPenerimaan));
@@ -355,8 +352,8 @@ async function getDetailPenerimaanBahanPendukung(noPenerimaan) {
       h.IsComplete,
       h.CreateBy,
       h.TglComplete
-    FROM dbo.PenerimaanBahanPendukung_h h
-    LEFT JOIN dbo.MstTimPenerimaan t ON t.IdTim = h.IdTim AND t.TipeModul = 'BAHAN_PENDUKUNG'
+    FROM dbo.PenerimaanBarangDagang_h h
+    LEFT JOIN dbo.MstTimPenerimaan t ON t.IdTim = h.IdTim AND t.TipeModul = 'BARANG_DAGANG'
     WHERE h.NoPenerimaan = @NoPenerimaan
   `);
 
@@ -366,20 +363,20 @@ async function getDetailPenerimaanBahanPendukung(noPenerimaan) {
   const itemsResult = await request.query(`
     SELECT
       dd.NoPenerimaan,
-      dd.NoBahanPendukung,
-      bp.IdSupplier,
+      dd.NoBarangDagang,
+      bd.IdSupplier,
       sup.NmSupplier AS NamaSupplier,
-      bp.IdCabinetMaterial,
-      cm.Nama AS NamaCabinetMaterial,
-      bp.Qty,
-      bp.Keterangan,
-      bp.HasBeenPrinted
-    FROM dbo.PenerimaanBahanPendukung_d dd
-    INNER JOIN dbo.BahanPendukung bp ON bp.NoBahanPendukung = dd.NoBahanPendukung
-    LEFT JOIN dbo.MstSupplier sup ON sup.IdSupplier = bp.IdSupplier
-    LEFT JOIN dbo.MstCabinetMaterial cm ON cm.IdCabinetMaterial = bp.IdCabinetMaterial
+      bd.IdBarangDagang,
+      md.NamaBarangDagang,
+      bd.Qty,
+      bd.Keterangan,
+      bd.HasBeenPrinted
+    FROM dbo.PenerimaanBarangDagang_d dd
+    INNER JOIN dbo.BarangDagang bd ON bd.NoBarangDagang = dd.NoBarangDagang
+    LEFT JOIN dbo.MstSupplier sup ON sup.IdSupplier = bd.IdSupplier
+    LEFT JOIN dbo.MstBarangDagang md ON md.IdBarangDagang = bd.IdBarangDagang
     WHERE dd.NoPenerimaan = @NoPenerimaan
-    ORDER BY bp.CreatedAt
+    ORDER BY bd.CreatedAt
   `);
 
   return {
@@ -388,7 +385,7 @@ async function getDetailPenerimaanBahanPendukung(noPenerimaan) {
   };
 }
 
-async function deletePenerimaanBahanPendukung(noPenerimaan, ctx) {
+async function deletePenerimaanBarangDagang(noPenerimaan, ctx) {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
@@ -397,7 +394,7 @@ async function deletePenerimaanBahanPendukung(noPenerimaan, ctx) {
     await applyAuditContext(new sql.Request(tx), ctx || {});
 
     const { docDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: "penerimaanBahanPendukung",
+      entityKey: "penerimaanBarangDagang",
       codeValue: noPenerimaan,
       runner: tx,
       useLock: true,
@@ -405,13 +402,13 @@ async function deletePenerimaanBahanPendukung(noPenerimaan, ctx) {
     });
 
     if (!docDateOnly) {
-      throw notFound("Data PenerimaanBahanPendukung tidak ditemukan");
+      throw notFound("Data PenerimaanBarangDagang tidak ditemukan");
     }
 
     await assertNotLocked({
       date: docDateOnly,
       runner: tx,
-      action: "delete PenerimaanBahanPendukung",
+      action: "delete PenerimaanBarangDagang",
       useLock: true,
     });
 
@@ -419,39 +416,39 @@ async function deletePenerimaanBahanPendukung(noPenerimaan, ctx) {
       .input("NoPenerimaan", sql.VarChar(20), String(noPenerimaan))
       .query(`
         SELECT 1
-        FROM dbo.PenerimaanBahanPendukung_d dd
-        INNER JOIN dbo.BahanPendukung bp ON bp.NoBahanPendukung = dd.NoBahanPendukung
-        WHERE dd.NoPenerimaan = @NoPenerimaan AND bp.DateUsage IS NOT NULL
+        FROM dbo.PenerimaanBarangDagang_d dd
+        INNER JOIN dbo.BarangDagang bd ON bd.NoBarangDagang = dd.NoBarangDagang
+        WHERE dd.NoPenerimaan = @NoPenerimaan AND bd.DateUsage IS NOT NULL
       `);
     if (usedRows.recordset.length > 0) {
       throw conflict(
-        "Tidak bisa menghapus PenerimaanBahanPendukung: sebagian bahan pendukung sudah terpakai di proses lain",
+        "Tidak bisa menghapus PenerimaanBarangDagang: sebagian barang dagang sudah terpakai di proses lain",
       );
     }
 
     const detailRows = await new sql.Request(tx)
       .input("NoPenerimaan", sql.VarChar(20), String(noPenerimaan))
       .query(`
-        SELECT NoBahanPendukung
-        FROM dbo.PenerimaanBahanPendukung_d
+        SELECT NoBarangDagang
+        FROM dbo.PenerimaanBarangDagang_d
         WHERE NoPenerimaan = @NoPenerimaan
       `);
 
-    // Hapus dulu baris pengikat (_d) sebelum baris BahanPendukung yang
-    // direferensikannya (FK_PenerimaanBahanPendukung_d_BahanPendukung).
+    // Hapus dulu baris pengikat (_d) sebelum baris BarangDagang yang
+    // direferensikannya (FK_PenerimaanBarangDagang_d_BarangDagang).
     await new sql.Request(tx)
       .input("NoPenerimaan", sql.VarChar(20), String(noPenerimaan))
-      .query(`DELETE FROM dbo.PenerimaanBahanPendukung_d WHERE NoPenerimaan = @NoPenerimaan`);
+      .query(`DELETE FROM dbo.PenerimaanBarangDagang_d WHERE NoPenerimaan = @NoPenerimaan`);
 
     for (const row of detailRows.recordset) {
       await new sql.Request(tx)
-        .input("NoBahanPendukung", sql.VarChar(50), row.NoBahanPendukung)
-        .query(`DELETE FROM dbo.BahanPendukung WHERE NoBahanPendukung = @NoBahanPendukung`);
+        .input("NoBarangDagang", sql.VarChar(50), row.NoBarangDagang)
+        .query(`DELETE FROM dbo.BarangDagang WHERE NoBarangDagang = @NoBarangDagang`);
     }
 
     await new sql.Request(tx)
       .input("NoPenerimaan", sql.VarChar(20), String(noPenerimaan))
-      .query(`DELETE FROM dbo.PenerimaanBahanPendukung_h WHERE NoPenerimaan = @NoPenerimaan`);
+      .query(`DELETE FROM dbo.PenerimaanBarangDagang_h WHERE NoPenerimaan = @NoPenerimaan`);
 
     await tx.commit();
     return true;
@@ -465,9 +462,9 @@ async function deletePenerimaanBahanPendukung(noPenerimaan, ctx) {
 
 // ==========================================
 //  TANDAI SELESAI (IsComplete = 1)
-//  PATCH /api/penerimaan-bahan-pendukung/:noPenerimaan/complete
+//  PATCH /api/penerimaan-barang-dagang/:noPenerimaan/complete
 // ==========================================
-async function completePenerimaanBahanPendukung(noPenerimaan, ctx) {
+async function completePenerimaanBarangDagang(noPenerimaan, ctx) {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
@@ -478,13 +475,13 @@ async function completePenerimaanBahanPendukung(noPenerimaan, ctx) {
     const result = await new sql.Request(tx)
       .input("NoPenerimaan", sql.VarChar(20), String(noPenerimaan))
       .query(`
-        UPDATE dbo.PenerimaanBahanPendukung_h
+        UPDATE dbo.PenerimaanBarangDagang_h
         SET IsComplete = 1, TglComplete = GETDATE()
         WHERE NoPenerimaan = @NoPenerimaan
       `);
 
     if (result.rowsAffected[0] === 0) {
-      throw notFound("PenerimaanBahanPendukung tidak ditemukan");
+      throw notFound("PenerimaanBarangDagang tidak ditemukan");
     }
 
     await tx.commit();
@@ -498,7 +495,7 @@ async function completePenerimaanBahanPendukung(noPenerimaan, ctx) {
 }
 
 // ==========================================
-//  STATUS TIM (untuk grid ala mesin washing / penerimaan bahan baku)
+//  STATUS TIM (untuk grid ala mesin washing / penerimaan bahan pendukung)
 // ==========================================
 async function getTimStatus() {
   const pool = await poolPromise;
@@ -515,21 +512,21 @@ async function getTimStatus() {
     FROM dbo.MstTimPenerimaan t WITH (NOLOCK)
     OUTER APPLY (
       -- Tim dianggap aktif selama masih ada NoPenerimaan yang BELUM
-      -- diselesaikan (IsComplete = 0), tidak dibatasi tanggal hari ini lagi.
+      -- diselesaikan (IsComplete = 0), tidak dibatasi tanggal hari ini.
       SELECT TOP 1
         h.NoPenerimaan, h.TglPenerimaan, h.IsComplete, h.CreateBy
-      FROM dbo.PenerimaanBahanPendukung_h h WITH (NOLOCK)
+      FROM dbo.PenerimaanBarangDagang_h h WITH (NOLOCK)
       WHERE h.IdTim = t.IdTim
         AND h.IsComplete = 0
       ORDER BY h.NoPenerimaan DESC
     ) today
     OUTER APPLY (
       SELECT COUNT(1) AS JumlahItem
-      FROM dbo.PenerimaanBahanPendukung_d dd
-      INNER JOIN dbo.BahanPendukung bp ON bp.NoBahanPendukung = dd.NoBahanPendukung
+      FROM dbo.PenerimaanBarangDagang_d dd
+      INNER JOIN dbo.BarangDagang bd ON bd.NoBarangDagang = dd.NoBarangDagang
       WHERE dd.NoPenerimaan = today.NoPenerimaan
     ) agg
-    WHERE t.TipeModul = 'BAHAN_PENDUKUNG'
+    WHERE t.TipeModul = 'BARANG_DAGANG'
     ORDER BY t.NamaTim ASC;
   `);
 
@@ -537,11 +534,11 @@ async function getTimStatus() {
 }
 
 module.exports = {
-  createHeaderPenerimaanBahanPendukung,
-  addItemsPenerimaanBahanPendukung,
-  listPenerimaanBahanPendukung,
-  getDetailPenerimaanBahanPendukung,
-  deletePenerimaanBahanPendukung,
-  completePenerimaanBahanPendukung,
+  createHeaderPenerimaanBarangDagang,
+  addItemsPenerimaanBarangDagang,
+  listPenerimaanBarangDagang,
+  getDetailPenerimaanBarangDagang,
+  deletePenerimaanBarangDagang,
+  completePenerimaanBarangDagang,
   getTimStatus,
 };

@@ -29,6 +29,13 @@ router.patch(
   ctrl.incrementHasBeenPrinted,
 );
 
+// PDF label (QR + nama barang + kode CYn)
+router.get(
+  "/labels/bahan-pendukung/:noBahanPendukung/pdf",
+  requirePermission("label_bahanpendukung:read"),
+  ctrl.generatePdf,
+);
+
 // DELETE Bahan Pendukung
 router.delete(
   "/labels/bahan-pendukung/:noBahanPendukung",

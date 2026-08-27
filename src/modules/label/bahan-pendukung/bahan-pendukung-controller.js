@@ -6,6 +6,10 @@ const {
   makeRequestId,
 } = require("../../../core/utils/http-context");
 const { getIo } = require("../../../core/utils/socket-instance");
+const { generateLabelPdf } = require("../../../core/utils/pdf/label-generator");
+const {
+  buildBahanPendukungLabelHtml,
+} = require("../../../core/utils/pdf/templates/bahan-pendukung-label-pdf/bahan-pendukung-label-pdf");
 
 // GET /labels/bahan-pendukung?page=&limit=&search=
 exports.getAll = async (req, res) => {
@@ -92,6 +96,47 @@ exports.delete = async (req, res) => {
     });
   } catch (err) {
     console.error("Delete Bahan Pendukung Error:", err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, message: err.message || "Terjadi kesalahan server" });
+  }
+};
+
+// GET /labels/bahan-pendukung/:noBahanPendukung/pdf
+exports.generatePdf = async (req, res) => {
+  try {
+    const NoBahanPendukung = String(req.params.noBahanPendukung || "").trim();
+    if (!NoBahanPendukung) {
+      return res.status(400).json({ success: false, message: "noBahanPendukung wajib diisi" });
+    }
+
+    const row = await service.getByNoBahanPendukung(NoBahanPendukung);
+
+    const d = new Date(row.CreatedAt);
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yy = String(d.getFullYear()).slice(-2);
+    const printed = row.HasBeenPrinted || 0;
+    const kodeLabel = printed > 0 ? `BP${mm}${yy}CY${printed}` : `BP${mm}${yy}`;
+
+    const data = {
+      noLabel: row.NoBahanPendukung,
+      namaProduk: row.NamaCabinetMaterial,
+      kode: row.NoBahanPendukung,
+      tanggal: kodeLabel,
+      createBy: row.CreateBy || "-",
+      watermarkText: "",
+    };
+
+    const pdfBuffer = await generateLabelPdf(data, buildBahanPendukungLabelHtml);
+
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `inline; filename="label-${NoBahanPendukung}.pdf"`,
+      "Content-Length": pdfBuffer.length,
+    });
+
+    return res.end(pdfBuffer);
+  } catch (err) {
+    console.error("Bahan Pendukung PDF Error:", err);
     const status = err.statusCode || 500;
     return res.status(status).json({ success: false, message: err.message || "Terjadi kesalahan server" });
   }

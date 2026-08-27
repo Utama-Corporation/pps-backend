@@ -45,11 +45,9 @@ BEGIN
                 i.NoPenerimaan,
                 i.TglPenerimaan,
                 i.IdTim,
-                i.Shift,
-                i.HourStart,
-                i.HourEnd,
+                i.IsComplete,
                 i.CreateBy,
-                i.DateTimeCreate
+                i.TglComplete
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         )
     FROM inserted i
@@ -72,11 +70,9 @@ BEGIN
                 d.NoPenerimaan,
                 d.TglPenerimaan,
                 d.IdTim,
-                d.Shift,
-                d.HourStart,
-                d.HourEnd,
+                d.IsComplete,
                 d.CreateBy,
-                d.DateTimeCreate
+                d.TglComplete
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         ),
         (
@@ -84,11 +80,9 @@ BEGIN
                 i.NoPenerimaan,
                 i.TglPenerimaan,
                 i.IdTim,
-                i.Shift,
-                i.HourStart,
-                i.HourEnd,
+                i.IsComplete,
                 i.CreateBy,
-                i.DateTimeCreate
+                i.TglComplete
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         )
     FROM inserted i
@@ -110,11 +104,9 @@ BEGIN
                 d.NoPenerimaan,
                 d.TglPenerimaan,
                 d.IdTim,
-                d.Shift,
-                d.HourStart,
-                d.HourEnd,
+                d.IsComplete,
                 d.CreateBy,
-                d.DateTimeCreate
+                d.TglComplete
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         ),
         NULL

@@ -320,7 +320,7 @@ async function listPenerimaanBahanPendukung({ page = 1, pageSize = 20, filter = 
       t.NamaTim,
       h.IsComplete,
       h.CreateBy,
-      h.DateTimeCreate,
+      h.TglComplete,
       agg.JumlahItem,
       agg.TotalQty
     FROM dbo.PenerimaanBahanPendukung_h h WITH (NOLOCK)
@@ -354,7 +354,7 @@ async function getDetailPenerimaanBahanPendukung(noPenerimaan) {
       t.NamaTim,
       h.IsComplete,
       h.CreateBy,
-      h.DateTimeCreate
+      h.TglComplete
     FROM dbo.PenerimaanBahanPendukung_h h
     LEFT JOIN dbo.MstTimPenerimaan t ON t.IdTim = h.IdTim AND t.TipeModul = 'BAHAN_PENDUKUNG'
     WHERE h.NoPenerimaan = @NoPenerimaan
@@ -429,18 +429,25 @@ async function deletePenerimaanBahanPendukung(noPenerimaan, ctx) {
       );
     }
 
-    await new sql.Request(tx)
+    const detailRows = await new sql.Request(tx)
       .input("NoPenerimaan", sql.VarChar(20), String(noPenerimaan))
       .query(`
-        DELETE bp
-        FROM dbo.BahanPendukung bp
-        INNER JOIN dbo.PenerimaanBahanPendukung_d dd ON dd.NoBahanPendukung = bp.NoBahanPendukung
-        WHERE dd.NoPenerimaan = @NoPenerimaan
+        SELECT NoBahanPendukung
+        FROM dbo.PenerimaanBahanPendukung_d
+        WHERE NoPenerimaan = @NoPenerimaan
       `);
 
+    // Hapus dulu baris pengikat (_d) sebelum baris BahanPendukung yang
+    // direferensikannya (FK_PenerimaanBahanPendukung_d_BahanPendukung).
     await new sql.Request(tx)
       .input("NoPenerimaan", sql.VarChar(20), String(noPenerimaan))
       .query(`DELETE FROM dbo.PenerimaanBahanPendukung_d WHERE NoPenerimaan = @NoPenerimaan`);
+
+    for (const row of detailRows.recordset) {
+      await new sql.Request(tx)
+        .input("NoBahanPendukung", sql.VarChar(50), row.NoBahanPendukung)
+        .query(`DELETE FROM dbo.BahanPendukung WHERE NoBahanPendukung = @NoBahanPendukung`);
+    }
 
     await new sql.Request(tx)
       .input("NoPenerimaan", sql.VarChar(20), String(noPenerimaan))
@@ -472,7 +479,7 @@ async function completePenerimaanBahanPendukung(noPenerimaan, ctx) {
       .input("NoPenerimaan", sql.VarChar(20), String(noPenerimaan))
       .query(`
         UPDATE dbo.PenerimaanBahanPendukung_h
-        SET IsComplete = 1
+        SET IsComplete = 1, TglComplete = GETDATE()
         WHERE NoPenerimaan = @NoPenerimaan
       `);
 
@@ -502,16 +509,24 @@ async function getTimStatus() {
       t.Aktif,
       today.NoPenerimaan,
       CONVERT(varchar(10), today.TglPenerimaan, 23) AS TglPenerimaan,
-      ISNULL(today.IsComplete, 0) AS IsComplete
+      ISNULL(today.IsComplete, 0) AS IsComplete,
+      today.CreateBy,
+      ISNULL(agg.JumlahItem, 0) AS JumlahItem
     FROM dbo.MstTimPenerimaan t WITH (NOLOCK)
     OUTER APPLY (
       SELECT TOP 1
-        h.NoPenerimaan, h.TglPenerimaan, h.IsComplete
+        h.NoPenerimaan, h.TglPenerimaan, h.IsComplete, h.CreateBy
       FROM dbo.PenerimaanBahanPendukung_h h WITH (NOLOCK)
       WHERE h.IdTim = t.IdTim
         AND CONVERT(date, h.TglPenerimaan) = CONVERT(date, GETDATE())
-      ORDER BY h.DateTimeCreate DESC
+      ORDER BY h.NoPenerimaan DESC
     ) today
+    OUTER APPLY (
+      SELECT COUNT(1) AS JumlahItem
+      FROM dbo.PenerimaanBahanPendukung_d dd
+      INNER JOIN dbo.BahanPendukung bp ON bp.NoBahanPendukung = dd.NoBahanPendukung
+      WHERE dd.NoPenerimaan = today.NoPenerimaan
+    ) agg
     WHERE t.TipeModul = 'BAHAN_PENDUKUNG'
     ORDER BY t.NamaTim ASC;
   `);

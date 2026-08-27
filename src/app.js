@@ -178,6 +178,8 @@ app.use("/api/mst", mstMaterialRoutes);
 app.use("/api/mst", mstTimPenerimaanBBRoutes);
 app.use("/api/mst", mstTimPenerimaanBahanPendukungRoutes);
 app.use("/api/mst", mstSupplierRoutes);
+app.use("/api/penerimaan-bahan-baku", penerimaanBahanBakuRoutes);
+app.use("/api/penerimaan-bahan-pendukung", penerimaanBahanPendukungRoutes);
 app.use("/api", mstPrinterRoutes);
 app.use("/api/audit", auditRoutes);
 app.use("/api/trade-in", tradeInRoutes);

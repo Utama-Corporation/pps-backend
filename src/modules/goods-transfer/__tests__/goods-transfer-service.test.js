@@ -1,4 +1,4 @@
-// src/modules/good-transfer/__tests__/good-transfer-service.test.js
+// src/modules/goods-transfer/__tests__/goods-transfer-service.test.js
 
 jest.mock("../../../core/config/db", () => {
   const mQuery = jest.fn();
@@ -39,11 +39,11 @@ jest.mock("../../../core/config/db", () => {
   };
 });
 
-const service = require("../good-transfer-service");
+const service = require("../goods-transfer-service");
 
-describe("good-transfer-service validation guards", () => {
-  test("createGoodTransfer menolak jika idWarehouseAsal/Tujuan kosong", async () => {
-    const result = await service.createGoodTransfer({
+describe("goods-transfer-service validation guards", () => {
+  test("createGoodsTransfer menolak jika idWarehouseAsal/Tujuan kosong", async () => {
+    const result = await service.createGoodsTransfer({
       idWarehouseAsal: null,
       idWarehouseTujuan: 2,
       labelCodes: ["A.0000000001-1"],
@@ -52,8 +52,8 @@ describe("good-transfer-service validation guards", () => {
     expect(result.code).toBe("VALIDATION_ERROR");
   });
 
-  test("createGoodTransfer menolak jika warehouse asal = tujuan", async () => {
-    const result = await service.createGoodTransfer({
+  test("createGoodsTransfer menolak jika warehouse asal = tujuan", async () => {
+    const result = await service.createGoodsTransfer({
       idWarehouseAsal: 1,
       idWarehouseTujuan: 1,
       labelCodes: ["A.0000000001-1"],
@@ -62,8 +62,8 @@ describe("good-transfer-service validation guards", () => {
     expect(result.code).toBe("SAME_WAREHOUSE");
   });
 
-  test("createGoodTransfer menolak jika labelCodes kosong", async () => {
-    const result = await service.createGoodTransfer({
+  test("createGoodsTransfer menolak jika labelCodes kosong", async () => {
+    const result = await service.createGoodsTransfer({
       idWarehouseAsal: 1,
       idWarehouseTujuan: 2,
       labelCodes: [],
@@ -72,8 +72,8 @@ describe("good-transfer-service validation guards", () => {
     expect(result.code).toBe("VALIDATION_ERROR");
   });
 
-  test("rejectGoodTransfer menolak jika alasanTolak kosong", async () => {
-    const result = await service.rejectGoodTransfer({
+  test("rejectGoodsTransfer menolak jika alasanTolak kosong", async () => {
+    const result = await service.rejectGoodsTransfer({
       noTransfer: "GT.0000000001",
       alasanTolak: "",
     });
@@ -81,8 +81,8 @@ describe("good-transfer-service validation guards", () => {
     expect(result.code).toBe("VALIDATION_ERROR");
   });
 
-  test("acceptGoodTransfer menolak jika items kosong", async () => {
-    const result = await service.acceptGoodTransfer({
+  test("acceptGoodsTransfer menolak jika items kosong", async () => {
+    const result = await service.acceptGoodsTransfer({
       noTransfer: "GT.0000000001",
       items: [],
     });
@@ -90,8 +90,8 @@ describe("good-transfer-service validation guards", () => {
     expect(result.code).toBe("VALIDATION_ERROR");
   });
 
-  test("acceptGoodTransfer menolak jika item tidak lengkap (kurang idLokasiTujuan)", async () => {
-    const result = await service.acceptGoodTransfer({
+  test("acceptGoodsTransfer menolak jika item tidak lengkap (kurang idLokasiTujuan)", async () => {
+    const result = await service.acceptGoodsTransfer({
       noTransfer: "GT.0000000001",
       items: [{ labelCode: "A.0000000001-1", blokTujuan: "A1" }],
     });

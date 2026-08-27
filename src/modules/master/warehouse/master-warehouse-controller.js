@@ -27,4 +27,30 @@ async function list(req, res) {
   }
 }
 
-module.exports = { list };
+async function setGroup(req, res) {
+  const idWarehouse = parseInt(req.params.idWarehouse, 10);
+  if (!Number.isFinite(idWarehouse) || idWarehouse <= 0) {
+    return res
+      .status(400)
+      .json({ success: false, message: 'Parameter idWarehouse tidak valid' });
+  }
+
+  try {
+    const data = await service.setGroup(idWarehouse, req.body?.idWarehouseGroup);
+    return res.status(200).json({
+      success: true,
+      message: 'Group warehouse berhasil diperbarui',
+      data,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    console.error('Error setGroup MstWarehouse:', error);
+    return res.status(statusCode).json({
+      success: false,
+      message: statusCode === 500 ? 'Internal Server Error' : error.message,
+      ...(statusCode === 500 ? { error: error.message } : {}),
+    });
+  }
+}
+
+module.exports = { list, setGroup };

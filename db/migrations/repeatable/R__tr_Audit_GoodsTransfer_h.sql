@@ -1,12 +1,12 @@
-/* ===== [dbo].[tr_Audit_GoodTransfer_h] ON [dbo].[GoodTransfer_h] ===== */
+/* ===== [dbo].[tr_Audit_GoodsTransfer_h] ON [dbo].[GoodsTransfer_h] ===== */
 -- =============================================
--- TRIGGER: tr_Audit_GoodTransfer_h
+-- TRIGGER: tr_Audit_GoodsTransfer_h
 -- AFTER INSERT, UPDATE, DELETE
 -- Actor: SESSION_CONTEXT('actor_id') fallback SESSION_CONTEXT('actor') fallback SUSER_SNAME()
 -- RequestId: SESSION_CONTEXT('request_id')
 -- =============================================
-CREATE OR ALTER TRIGGER [dbo].[tr_Audit_GoodTransfer_h]
-ON [dbo].[GoodTransfer_h]
+CREATE OR ALTER TRIGGER [dbo].[tr_Audit_GoodsTransfer_h]
+ON [dbo].[GoodsTransfer_h]
 AFTER INSERT, UPDATE, DELETE
 AS
 BEGIN
@@ -28,7 +28,7 @@ BEGIN
   INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
   SELECT
     'INSERT',
-    'GoodTransfer_h',
+    'GoodsTransfer_h',
     @actor,
     @rid,
     CONCAT('{"NoTransfer":"', i.NoTransfer, '"}'),
@@ -51,7 +51,7 @@ BEGIN
   INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
   SELECT
     'UPDATE',
-    'GoodTransfer_h',
+    'GoodsTransfer_h',
     @actor,
     @rid,
     CONCAT('{"NoTransfer":"', i.NoTransfer, '"}'),
@@ -80,7 +80,7 @@ BEGIN
   INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
   SELECT
     'DELETE',
-    'GoodTransfer_h',
+    'GoodsTransfer_h',
     @actor,
     @rid,
     CONCAT('{"NoTransfer":"', d.NoTransfer, '"}'),

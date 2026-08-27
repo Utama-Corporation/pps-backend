@@ -1,12 +1,12 @@
-/* ===== [dbo].[tr_Audit_GoodTransferItem] ON [dbo].[GoodTransferItem] ===== */
+/* ===== [dbo].[tr_Audit_GoodsTransferItem] ON [dbo].[GoodsTransferItem] ===== */
 -- =============================================
--- TRIGGER: tr_Audit_GoodTransferItem
+-- TRIGGER: tr_Audit_GoodsTransferItem
 -- AFTER INSERT, UPDATE, DELETE
 -- Actor: SESSION_CONTEXT('actor_id') fallback SESSION_CONTEXT('actor') fallback SUSER_SNAME()
 -- RequestId: SESSION_CONTEXT('request_id')
 -- =============================================
-CREATE OR ALTER TRIGGER [dbo].[tr_Audit_GoodTransferItem]
-ON [dbo].[GoodTransferItem]
+CREATE OR ALTER TRIGGER [dbo].[tr_Audit_GoodsTransferItem]
+ON [dbo].[GoodsTransferItem]
 AFTER INSERT, UPDATE, DELETE
 AS
 BEGIN
@@ -28,7 +28,7 @@ BEGIN
   INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
   SELECT
     'INSERT',
-    'GoodTransferItem',
+    'GoodsTransferItem',
     @actor,
     @rid,
     CONCAT('{"IdTransferItem":"', i.IdTransferItem, '"}'),
@@ -49,7 +49,7 @@ BEGIN
   INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
   SELECT
     'UPDATE',
-    'GoodTransferItem',
+    'GoodsTransferItem',
     @actor,
     @rid,
     CONCAT('{"IdTransferItem":"', i.IdTransferItem, '"}'),
@@ -74,7 +74,7 @@ BEGIN
   INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
   SELECT
     'DELETE',
-    'GoodTransferItem',
+    'GoodsTransferItem',
     @actor,
     @rid,
     CONCAT('{"IdTransferItem":"', d.IdTransferItem, '"}'),

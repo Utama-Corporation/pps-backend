@@ -68,6 +68,7 @@ const bjJualRoutes = require("./modules/bj-jual/bj-jual-route");
 const penjualanRoutes = require("./modules/penjualan/penjualan-route");
 const mstPembeliRoutes = require("./modules/master/pembeli/master-pembeli-route");
 const mstWarehouseRoutes = require("./modules/master/warehouse/master-warehouse-route");
+const mstWarehouseGroupRoutes = require("./modules/master/warehouse-group/master-warehouse-group-route");
 const mstPrinterRoutes = require("./modules/master/printer/master-printer-route");
 const mstReguRoutes = require("./modules/master/regu/master-regu-route");
 const mstShiftRoutes = require("./modules/master/shift/master-shift-route");
@@ -79,11 +80,12 @@ const auditRoutes = require("./modules/audit/audit-route");
 const updateRoutes = require("./modules/update/update-routes");
 const printLockRoutes = require("./modules/label/print-lock/print-lock-routes");
 const mappingRoutes = require("./modules/mapping/mapping-routes");
-const goodTransferRoutes = require("./modules/good-transfer/good-transfer-routes");
+const goodsTransferRoutes = require("./modules/goods-transfer/goods-transfer-routes");
 const masterJenisRoutes = require("./modules/master-jenis/master-jenis-routes");
 const masterKategoriRoutes = require("./modules/master-kategori/master-kategori-routes");
 const tradeInRoutes = require("./modules/trade-in/trade-in-routes");
 const laporanBrokerRoutes = require("./modules/laporan/broker/broker-route");
+const masterPermissionGroupRoutes = require("./modules/master-permission-group/master-permission-group-routes");
 
 const app = express();
 
@@ -116,7 +118,7 @@ app.use("/api/", labelWashingRoutes);
 app.use("/api/plastic-type", plasticTypeRoutes);
 app.use("/api/blok", blokRoutes);
 app.use("/api/mapping", mappingRoutes);
-app.use("/api/good-transfer", goodTransferRoutes);
+app.use("/api/goods-transfer", goodsTransferRoutes);
 app.use("/api", masterJenisRoutes);
 app.use("/api", masterKategoriRoutes);
 app.use("/api/", labelRoutes);
@@ -172,6 +174,7 @@ app.use("/api/bj-jual", bjJualRoutes);
 app.use("/api/penjualan", penjualanRoutes);
 app.use("/api/mst", mstPembeliRoutes);
 app.use("/api/mst", mstWarehouseRoutes);
+app.use("/api/mst", mstWarehouseGroupRoutes);
 app.use("/api/mst", mstReguRoutes);
 app.use("/api/mst", mstShiftRoutes);
 app.use("/api/mst", mstMaterialRoutes);
@@ -185,6 +188,7 @@ app.use("/api/audit", auditRoutes);
 app.use("/api/trade-in", tradeInRoutes);
 app.use("/api/retur-v3", returV3Routes);
 app.use("/api/laporan/broker", laporanBrokerRoutes);
+app.use("/api/master-permission-group", masterPermissionGroupRoutes);
 
 // ❌ Error handling
 app.use((err, req, res, next) => {

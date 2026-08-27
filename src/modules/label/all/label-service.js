@@ -692,7 +692,7 @@ function getAvailabilityCheckSQL(prefix, tableName) {
 }
 
 // =====================
-// Helper: cek apakah label sedang berstatus IN_TRANSIT di Good Transfer
+// Helper: cek apakah label sedang berstatus IN_TRANSIT di Goods Transfer
 // (dipakai untuk mengunci label agar tidak bisa di-mapping/dipakai produksi lain)
 // =====================
 async function isLabelInTransit(labelCode, runner) {
@@ -701,7 +701,7 @@ async function isLabelInTransit(labelCode, runner) {
     .request()
     .input("LabelCode", sql.NVarChar(50), labelCode).query(`
       SELECT TOP 1 1 AS Found
-      FROM dbo.GoodTransferItem
+      FROM dbo.GoodsTransferItem
       WHERE LabelCode = @LabelCode AND StatusItem = 'IN_TRANSIT'
     `);
   return res.recordset.length > 0;
@@ -826,16 +826,16 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
     };
   }
 
-  // ========= 1.1) GUARD: label sedang dalam proses Good Transfer =========
+  // ========= 1.1) GUARD: label sedang dalam proses Goods Transfer =========
   if (await isLabelInTransit(labelCode, pool)) {
     return {
       success: false,
       code: "LABEL_IN_TRANSIT",
-      message: `Label ${labelCode} sedang dalam proses Good Transfer, tidak bisa di-mapping`,
+      message: `Label ${labelCode} sedang dalam proses Goods Transfer, tidak bisa di-mapping`,
     };
   }
 
-  // ========= 1.2) GUARD: tujuan tidak boleh lintas warehouse (harus lewat Good Transfer) =========
+  // ========= 1.2) GUARD: tujuan tidak boleh lintas warehouse (harus lewat Goods Transfer) =========
   const targetWarehouseRes = await pool
     .request()
     .input("Blok", sql.VarChar(100), blokNorm).query(`
@@ -850,11 +850,40 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
     beforeIdWarehouse !== null &&
     targetIdWarehouse !== beforeIdWarehouse
   ) {
-    return {
-      success: false,
-      code: "CROSS_WAREHOUSE_NOT_ALLOWED",
-      message: `Pindah lintas warehouse harus melalui Good Transfer`,
-    };
+    // Lintas warehouse. Dikecualikan dari kewajiban Goods Transfer HANYA bila
+    // kedua warehouse berada di "site" (grup) yang sama:
+    // dbo.MstWarehouse.IdWarehouseGroup keduanya NON-NULL dan SAMA.
+    const groupRes = await pool
+      .request()
+      .input("WhBefore", sql.Int, beforeIdWarehouse)
+      .input("WhTarget", sql.Int, targetIdWarehouse).query(`
+        SELECT IdWarehouse, IdWarehouseGroup
+        FROM dbo.MstWarehouse
+        WHERE IdWarehouse IN (@WhBefore, @WhTarget)
+      `);
+
+    const groupByWarehouse = new Map(
+      (groupRes.recordset || []).map((r) => [
+        Number(r.IdWarehouse),
+        toIntOrNull(r.IdWarehouseGroup),
+      ]),
+    );
+    const beforeGroup = groupByWarehouse.get(beforeIdWarehouse) ?? null;
+    const targetGroup = groupByWarehouse.get(targetIdWarehouse) ?? null;
+
+    const sameSite =
+      beforeGroup !== null &&
+      targetGroup !== null &&
+      beforeGroup === targetGroup;
+
+    if (!sameSite) {
+      return {
+        success: false,
+        code: "CROSS_WAREHOUSE_NOT_ALLOWED",
+        message: `Pindah lintas warehouse harus melalui Goods Transfer`,
+      };
+    }
+    // sameSite === true -> lanjut sebagai mapping move biasa (tanpa Goods Transfer)
   }
 
   // ========= 1.5) GUARD: jika tidak ada perubahan, hentikan di sini =========

@@ -1,4 +1,4 @@
-const goodTransferService = require("./good-transfer-service");
+const goodsTransferService = require("./goods-transfer-service");
 
 const ERROR_STATUS = {
   VALIDATION_ERROR: 400,
@@ -22,7 +22,7 @@ function _actorCtx(req) {
 
 async function inspectLabelHandler(req, res) {
   try {
-    const result = await goodTransferService.inspectLabel({
+    const result = await goodsTransferService.inspectLabel({
       labelCode: req.query.labelCode,
       idWarehouseAsal: req.query.idWarehouseAsal,
     });
@@ -39,7 +39,7 @@ async function inspectLabelHandler(req, res) {
 
 async function acceptScanHandler(req, res) {
   try {
-    const result = await goodTransferService.acceptScannedItem({
+    const result = await goodsTransferService.acceptScannedItem({
       labelCode: req.body?.labelCode,
       blokTujuan: req.body?.blokTujuan,
       idLokasiTujuan: req.body?.idLokasiTujuan,
@@ -65,7 +65,7 @@ async function createHandler(req, res) {
   try {
     const { idWarehouseAsal, idWarehouseTujuan, labelCodes, tanggalKirim, catatan } = req.body || {};
 
-    const result = await goodTransferService.createGoodTransfer({
+    const result = await goodsTransferService.createGoodsTransfer({
       idWarehouseAsal,
       idWarehouseTujuan,
       labelCodes,
@@ -80,7 +80,7 @@ async function createHandler(req, res) {
     }
     return res.status(201).json(result);
   } catch (err) {
-    console.error("Error creating good transfer:", err);
+    console.error("Error creating goods transfer:", err);
     const status = err.statusCode || 500;
     return res.status(status).json({
       success: false,
@@ -92,14 +92,14 @@ async function createHandler(req, res) {
 
 async function listAllHandler(req, res) {
   try {
-    const result = await goodTransferService.listAll({
+    const result = await goodsTransferService.listAll({
       status: req.query.status || null,
       page: parseInt(req.query.page) || 1,
       limit: parseInt(req.query.limit) || 50,
     });
     return res.json(result);
   } catch (err) {
-    console.error("Error listing good transfers:", err);
+    console.error("Error listing goods transfers:", err);
     return res.status(500).json({ success: false, message: "Terjadi kesalahan server", error: err.message });
   }
 }
@@ -110,7 +110,7 @@ async function listOutgoingHandler(req, res) {
     if (!idWarehouseAsal) {
       return res.status(400).json({ success: false, message: "Parameter idWarehouse wajib diisi" });
     }
-    const result = await goodTransferService.listOutgoing({
+    const result = await goodsTransferService.listOutgoing({
       idWarehouseAsal,
       status: req.query.status || null,
       page: parseInt(req.query.page) || 1,
@@ -129,7 +129,7 @@ async function listIncomingHandler(req, res) {
     if (!idWarehouseTujuan) {
       return res.status(400).json({ success: false, message: "Parameter idWarehouse wajib diisi" });
     }
-    const result = await goodTransferService.listIncoming({
+    const result = await goodsTransferService.listIncoming({
       idWarehouseTujuan,
       status: req.query.status || null,
       page: parseInt(req.query.page) || 1,
@@ -144,21 +144,21 @@ async function listIncomingHandler(req, res) {
 
 async function detailHandler(req, res) {
   try {
-    const result = await goodTransferService.getDetail(req.params.noTransfer);
+    const result = await goodsTransferService.getDetail(req.params.noTransfer);
     if (!result.success) {
       const status = ERROR_STATUS[result.code] || 400;
       return res.status(status).json(result);
     }
     return res.json(result);
   } catch (err) {
-    console.error("Error fetching good transfer detail:", err);
+    console.error("Error fetching goods transfer detail:", err);
     return res.status(500).json({ success: false, message: "Terjadi kesalahan server", error: err.message });
   }
 }
 
 async function cancelHandler(req, res) {
   try {
-    const result = await goodTransferService.cancelGoodTransfer({
+    const result = await goodsTransferService.cancelGoodsTransfer({
       noTransfer: req.params.noTransfer,
       ..._actorCtx(req),
     });
@@ -168,14 +168,14 @@ async function cancelHandler(req, res) {
     }
     return res.json(result);
   } catch (err) {
-    console.error("Error cancelling good transfer:", err);
+    console.error("Error cancelling goods transfer:", err);
     return res.status(500).json({ success: false, message: "Terjadi kesalahan server", error: err.message });
   }
 }
 
 async function rejectHandler(req, res) {
   try {
-    const result = await goodTransferService.rejectGoodTransfer({
+    const result = await goodsTransferService.rejectGoodsTransfer({
       noTransfer: req.params.noTransfer,
       alasanTolak: req.body?.alasanTolak,
       ..._actorCtx(req),
@@ -186,14 +186,14 @@ async function rejectHandler(req, res) {
     }
     return res.json(result);
   } catch (err) {
-    console.error("Error rejecting good transfer:", err);
+    console.error("Error rejecting goods transfer:", err);
     return res.status(500).json({ success: false, message: "Terjadi kesalahan server", error: err.message });
   }
 }
 
 async function acceptHandler(req, res) {
   try {
-    const result = await goodTransferService.acceptGoodTransfer({
+    const result = await goodsTransferService.acceptGoodsTransfer({
       noTransfer: req.params.noTransfer,
       items: req.body?.items,
       ..._actorCtx(req),
@@ -204,7 +204,7 @@ async function acceptHandler(req, res) {
     }
     return res.json(result);
   } catch (err) {
-    console.error("Error accepting good transfer:", err);
+    console.error("Error accepting goods transfer:", err);
     const status = err.statusCode || 500;
     return res.status(status).json({
       success: false,

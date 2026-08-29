@@ -1,14 +1,17 @@
 const { sql, poolPromise } = require("../../core/config/db");
-const { generateNextCode } = require("../../core/utils/sequence-code-helper");
 const { assertNotLocked } = require("../../core/shared/tutup-transaksi-guard");
 const { applyAuditContext } = require("../../core/utils/db-audit-context");
-const labelService = require("../label/all/label-service");
+const { scanLabel } = require("./handlers/scan-label.handler");
+const { CATEGORY_CONFIG } = require("./goods-transfer-category-registry");
 
-const {
-  resolveLabelTable,
-  getLabelColumn,
-  getAvailabilityCheckSQL,
-} = labelService;
+// ────────────────────────────────────────────────────────────────────────────
+// Model baru: dbo.GoodsTransfer_h + dbo.GoodsTransferItem_d di-INSERT oleh ERP
+// Ascend langsung ke DB PPS dan diperlakukan READ-ONLY di sini. PPS hanya:
+//   * menampilkan transfer + baris permintaan (_d),
+//   * mencatat realisasi scan label ke dbo.GoodsTransferItemScan_d (scanLabel),
+//   * memindahkan label fisik saat langkah terima (acceptScannedItem).
+// PPS tidak pernah menulis GoodsTransfer_h / GoodsTransferItem_d.
+// ────────────────────────────────────────────────────────────────────────────
 
 function toIntOrNull(v) {
   return v === null || v === undefined || Number.isNaN(Number(v))
@@ -20,176 +23,192 @@ function normBlok(v) {
   return (v ?? "").toString().trim().toUpperCase();
 }
 
-function resolveLabelColExpr(prefix) {
-  if (prefix === "A" || prefix === "AB") {
-    return "(CAST(NoBahanBaku AS NVARCHAR(50)) + '-' + CAST(NoPallet AS NVARCHAR(10)))";
-  }
-  return getLabelColumn(prefix);
-}
-
-/**
- * Resolve IdWarehouse pemilik sebuah Blok dari dbo.MstBlok (sumber kebenaran
- * relasi Blok->Warehouse) — JANGAN percaya kolom IdWarehouse yang tersimpan
- * langsung di tabel label, karena bisa tidak sinkron dengan Blok terkini.
- */
-async function _resolveWarehouseForBlok(pool, blok) {
-  const blokNorm = normBlok(blok);
-  if (!blokNorm) return null;
-  const res = await pool
-    .request()
-    .input("Blok", sql.VarChar(100), blokNorm)
+async function _resolveWarehouseForBlok(runner, blok) {
+  const b = normBlok(blok);
+  if (!b) return null;
+  const res = await new sql.Request(runner)
+    .input("Blok", sql.VarChar(100), b)
     .query(`SELECT TOP 1 IdWarehouse FROM dbo.MstBlok WHERE Blok = @Blok`);
   return toIntOrNull(res.recordset[0]?.IdWarehouse);
 }
 
-/**
- * Ambil info ketersediaan + lokasi/warehouse saat ini untuk 1 label.
- * Mengembalikan null jika label tidak dikenali.
- */
-async function _inspectLabel(pool, labelCode) {
-  const prefix = (String(labelCode).split(".")[0] || "").toUpperCase();
-  const tableName = resolveLabelTable(prefix);
-  if (!tableName) return null;
+// SELECT list bersama untuk list header + status pemenuhan turunan.
+// FulfillStatus (gabungan Status kolom + agregat scan):
+//   OPEN     - belum ada scan, Status IN_TRANSIT
+//   PARTIAL  - ada scan tapi belum semua baris terpenuhi
+//   READY    - semua baris terpenuhi, belum ditekan "Kirim" (tombol Kirim tampil)
+//   SHIPPED  - Status = 'SHIPPED' (sudah dikirim, menunggu penerimaan)
+//   RECEIVED - Status = 'RECEIVED' (atau SHIPPED tapi semua scan sudah diterima)
+//   CANCELLED / REJECTED - ikut Status apa adanya
+const _HEADER_SELECT = `
+  SELECT
+    h.*,
+    whAsal.NamaWarehouse   AS NamaWarehouseAsal,
+    whTujuan.NamaWarehouse AS NamaWarehouseTujuan,
+    uKirim.Username        AS UsernameKirim,
+    uTerima.Username       AS UsernameTerima,
+    agg.TotalLines,
+    agg.CompletedLines,
+    agg.ScanCount,
+    agg.InTransitCount,
+    CASE
+      WHEN h.Status IN ('CANCELLED', 'REJECTED') THEN h.Status
+      WHEN h.Status = 'RECEIVED' THEN 'RECEIVED'
+      WHEN h.Status = 'SHIPPED' AND agg.ScanCount > 0 AND agg.InTransitCount = 0
+           THEN 'RECEIVED'
+      WHEN h.Status = 'SHIPPED' THEN 'SHIPPED'
+      WHEN agg.ScanCount = 0 THEN 'OPEN'
+      WHEN agg.TotalLines > 0 AND agg.CompletedLines >= agg.TotalLines THEN 'READY'
+      ELSE 'PARTIAL'
+    END AS FulfillStatus
+  FROM dbo.GoodsTransfer_h h
+  LEFT JOIN dbo.MstWarehouse whAsal   ON whAsal.IdWarehouse   = h.IdWarehouseAsal
+  LEFT JOIN dbo.MstWarehouse whTujuan ON whTujuan.IdWarehouse = h.IdWarehouseTujuan
+  LEFT JOIN dbo.MstUsername  uKirim   ON uKirim.IdUsername    = h.IdUsernameKirim
+  LEFT JOIN dbo.MstUsername  uTerima  ON uTerima.IdUsername   = h.IdUsernameTerima
+  OUTER APPLY (
+    SELECT
+      COUNT(1) AS TotalLines,
+      ISNULL(SUM(CASE WHEN d.PcsScanned >= d.Pcs THEN 1 ELSE 0 END), 0) AS CompletedLines,
+      (SELECT COUNT(1) FROM dbo.GoodsTransferItemScan_d s
+        WHERE s.NoTransfer = h.NoTransfer) AS ScanCount,
+      (SELECT COUNT(1) FROM dbo.GoodsTransferItemScan_d s
+        WHERE s.NoTransfer = h.NoTransfer AND s.IsReceived = 0) AS InTransitCount
+    FROM (
+      SELECT d0.Pcs,
+        ISNULL((
+          SELECT SUM(s.Pcs) FROM dbo.GoodsTransferItemScan_d s
+          WHERE s.NoTransfer = d0.NoTransfer AND s.KodeKategori = d0.KodeKategori
+            AND s.IdJenis = d0.IdJenis
+        ), 0) AS PcsScanned
+      FROM dbo.GoodsTransferItem_d d0
+      WHERE d0.NoTransfer = h.NoTransfer
+    ) d
+  ) agg
+`;
 
-  const sqlText = getAvailabilityCheckSQL(prefix, tableName);
-  const res = await pool
-    .request()
-    .input("LabelCode", sql.NVarChar(50), labelCode)
-    .query(sqlText);
-
-  if (!res.recordset.length) return null;
-
-  const row = res.recordset[0];
-  const blok = row.Blok ?? null;
-
-  return {
-    prefix,
-    tableName,
-    labelCol: resolveLabelColExpr(prefix),
-    blok,
-    idLokasi: toIntOrNull(row.IdLokasi),
-    // IdWarehouse dihitung dari MstBlok (relasi Blok->Warehouse yang sebenarnya),
-    // bukan dari kolom IdWarehouse pada tabel label yang bisa basi.
-    idWarehouse: await _resolveWarehouseForBlok(pool, blok),
-    available: !!row.Available,
-  };
+async function _getHeaderRow(runner, noTransfer) {
+  const res = await new sql.Request(runner)
+    .input("NoTransfer", sql.VarChar(20), noTransfer)
+    .query(`${_HEADER_SELECT} WHERE h.NoTransfer = @NoTransfer`);
+  return res.recordset[0] || null;
 }
 
-async function _isInTransit(runner, labelCode) {
-  const req = new sql.Request(runner);
-  const res = await req
-    .input("LabelCode", sql.NVarChar(50), labelCode).query(`
-      SELECT TOP 1 1 AS Found
-      FROM dbo.GoodsTransferItem
-      WHERE LabelCode = @LabelCode AND StatusItem = 'IN_TRANSIT'
-    `);
-  return res.recordset.length > 0;
-}
-
 /**
- * Cek 1 label sebelum ditambahkan ke daftar transfer (dipanggil setiap kali
- * user scan/input kode label di layar create). Menolak kalau label tidak
- * dikenali, sudah terpakai, sedang IN_TRANSIT, atau blok saat ini bukan milik
- * warehouse asal yang dipilih.
+ * Detail 1 transfer: header + baris permintaan (_d, dari Ascend) + realisasi
+ * scan. Bentuk mirip penjualan-service.getHeaderDetail.
  */
-async function inspectLabel({ labelCode, idWarehouseAsal }) {
-  const code = String(labelCode || "").trim();
-  if (!code) {
-    return { success: false, code: "VALIDATION_ERROR", message: "labelCode wajib diisi" };
-  }
-
+async function getDetail(noTransfer) {
   const pool = await poolPromise;
-  const info = await _inspectLabel(pool, code);
-
-  if (!info) {
-    return {
-      success: false,
-      code: "UNKNOWN_PREFIX",
-      message: `Label ${code} tidak dikenali`,
-    };
-  }
-  if (!info.available) {
-    return {
-      success: false,
-      code: "ALREADY_USED",
-      message: `Label ${code} sudah terpakai`,
-    };
-  }
-  if (await _isInTransit(pool, code)) {
-    return {
-      success: false,
-      code: "LABEL_IN_TRANSIT",
-      message: `Label ${code} sedang dalam proses Goods Transfer lain`,
-    };
+  const header = await _getHeaderRow(pool, noTransfer);
+  if (!header) {
+    return { success: false, code: "NOT_FOUND", message: "Transfer tidak ditemukan" };
   }
 
-  const whAsal = toIntOrNull(idWarehouseAsal);
-  if (whAsal !== null && info.idWarehouse !== whAsal) {
-    return {
-      success: false,
-      code: "WAREHOUSE_MISMATCH",
-      message: `Label ${code} berada di blok ${info.blok ?? "-"} yang bukan milik warehouse asal yang dipilih`,
-    };
+  const linesRes = await pool
+    .request()
+    .input("NoTransfer", sql.VarChar(20), noTransfer).query(`
+      SELECT
+        d.KodeKategori,
+        d.IdJenis,
+        CASE
+          WHEN d.KodeKategori = 'furniturewip' THEN mw.Nama
+          WHEN d.KodeKategori = 'barangjadi'   THEN mbj.NamaBJ
+          ELSE NULL
+        END AS NamaJenis,
+        d.Pcs AS PcsRequired,
+        ISNULL((
+          SELECT SUM(s.Pcs) FROM dbo.GoodsTransferItemScan_d s
+          WHERE s.NoTransfer = d.NoTransfer AND s.KodeKategori = d.KodeKategori
+            AND s.IdJenis = d.IdJenis
+        ), 0) AS PcsScanned,
+        d.DateTimeCreate
+      FROM dbo.GoodsTransferItem_d d
+      LEFT JOIN dbo.MstCabinetWIP mw
+        ON d.KodeKategori = 'furniturewip' AND mw.IdCabinetWIP = d.IdJenis
+      LEFT JOIN dbo.MstBarangJadi mbj
+        ON d.KodeKategori = 'barangjadi' AND mbj.IdBJ = d.IdJenis
+      WHERE d.NoTransfer = @NoTransfer
+      ORDER BY d.KodeKategori, d.IdJenis
+    `);
+
+  const scansRes = await pool
+    .request()
+    .input("NoTransfer", sql.VarChar(20), noTransfer).query(`
+      SELECT IdScan, KodeKategori, IdJenis, LabelCode, Pcs, IsReceived,
+             BlokTujuan, IdLokasiTujuan, DateTimeScan, DateTimeTerima
+      FROM dbo.GoodsTransferItemScan_d
+      WHERE NoTransfer = @NoTransfer
+      ORDER BY DateTimeScan ASC, IdScan ASC
+    `);
+
+  const scans = scansRes.recordset || [];
+  const lines = (linesRes.recordset || []).map((r) => ({
+    kodeKategori: r.KodeKategori,
+    idJenis: r.IdJenis,
+    namaJenis: r.NamaJenis,
+    pcsRequired: r.PcsRequired,
+    pcsScanned: r.PcsScanned,
+    isComplete: r.PcsScanned >= r.PcsRequired,
+    dateTimeCreate: r.DateTimeCreate,
+    scans: scans.filter(
+      (s) => s.KodeKategori === r.KodeKategori && s.IdJenis === r.IdJenis,
+    ),
+  }));
+
+  return { success: true, data: { header, lines, scans } };
+}
+
+async function _listByWhere(where, bindings, { page = 1, limit = 50 }) {
+  const pool = await poolPromise;
+  const offset = (Math.max(page, 1) - 1) * Math.max(limit, 1);
+  const req = pool.request();
+  for (const [name, type, value] of bindings) req.input(name, type, value);
+  req.input("Offset", sql.Int, offset).input("Limit", sql.Int, limit);
+  const res = await req.query(`
+    ${_HEADER_SELECT}
+    ${where}
+    ORDER BY h.DateTimeKirim DESC
+    OFFSET @Offset ROWS FETCH NEXT @Limit ROWS ONLY
+  `);
+  return { success: true, data: res.recordset };
+}
+
+async function listAll({ status, page = 1, limit = 50 }) {
+  const where = status ? "WHERE h.Status = @Status" : "";
+  const bindings = status ? [["Status", sql.VarChar(20), status]] : [];
+  return _listByWhere(where, bindings, { page, limit });
+}
+
+async function listOutgoing({ idWarehouseAsal, status, page = 1, limit = 50 }) {
+  let where = "WHERE h.IdWarehouseAsal = @IdWarehouseAsal";
+  const bindings = [["IdWarehouseAsal", sql.Int, idWarehouseAsal]];
+  if (status) {
+    where += " AND h.Status = @Status";
+    bindings.push(["Status", sql.VarChar(20), status]);
   }
+  return _listByWhere(where, bindings, { page, limit });
+}
 
-  const summary = await labelService.getLabelSummaryByCode(code);
-
-  return {
-    success: true,
-    data: {
-      labelCode: code,
-      prefix: info.prefix,
-      blok: info.blok,
-      idLokasi: info.idLokasi,
-      idWarehouse: info.idWarehouse,
-      namaJenis: summary?.NamaJenis ?? null,
-      kategori: summary?.Kategori ?? null,
-      uom: summary?.Uom ?? null,
-      qty: summary?.Qty ?? null,
-      berat: summary?.Berat ?? null,
-    },
-  };
+async function listIncoming({ idWarehouseTujuan, status, page = 1, limit = 50 }) {
+  let where = "WHERE h.IdWarehouseTujuan = @IdWarehouseTujuan";
+  const bindings = [["IdWarehouseTujuan", sql.Int, idWarehouseTujuan]];
+  if (status) {
+    where += " AND h.Status = @Status";
+    bindings.push(["Status", sql.VarChar(20), status]);
+  }
+  return _listByWhere(where, bindings, { page, limit });
 }
 
 /**
- * Create Goods Transfer: kirim N label dari 1 warehouse asal ke 1 warehouse tujuan.
+ * Tandai transfer "Kirim": syarat SEMUA baris permintaan _d sudah terpenuhi
+ * (SUM scan pcs >= Pcs diminta). Efeknya Status IN_TRANSIT -> SHIPPED, dan
+ * scan/undo dikunci. Header milik Ascend tapi Status ikut ditulis PPS.
  */
-async function createGoodsTransfer({
-  idWarehouseAsal,
-  idWarehouseTujuan,
-  labelCodes,
-  tanggalKirim,
-  catatan,
-  actorId,
-  actorUsername,
-  requestId,
-}) {
-  const whAsal = toIntOrNull(idWarehouseAsal);
-  const whTujuan = toIntOrNull(idWarehouseTujuan);
-
-  if (!whAsal || !whTujuan) {
-    return {
-      success: false,
-      code: "VALIDATION_ERROR",
-      message: "idWarehouseAsal dan idWarehouseTujuan wajib diisi",
-    };
-  }
-  if (whAsal === whTujuan) {
-    return {
-      success: false,
-      code: "SAME_WAREHOUSE",
-      message: "Warehouse asal dan tujuan tidak boleh sama",
-    };
-  }
-  const codes = Array.isArray(labelCodes)
-    ? [...new Set(labelCodes.map((c) => String(c).trim()).filter(Boolean))]
-    : [];
-  if (codes.length === 0) {
-    return {
-      success: false,
-      code: "VALIDATION_ERROR",
-      message: "labelCodes wajib diisi minimal 1 label",
-    };
+async function markKirim({ noTransfer, actorId, actorUsername, requestId }) {
+  const no = String(noTransfer || "").trim();
+  if (!no) {
+    return { success: false, code: "VALIDATION_ERROR", message: "noTransfer wajib" };
   }
 
   const pool = await poolPromise;
@@ -206,92 +225,55 @@ async function createGoodsTransfer({
       requestId,
     });
 
-    await assertNotLocked({
-      date: tanggalKirim,
-      runner: tx,
-      action: "membuat Goods Transfer",
-      useLock: true,
-    });
-
-    const items = [];
-    for (const labelCode of codes) {
-      const info = await _inspectLabel(pool, labelCode);
-      if (!info) {
-        await tx.rollback();
-        return {
-          success: false,
-          code: "UNKNOWN_PREFIX",
-          message: `Label ${labelCode} tidak dikenali`,
-        };
-      }
-      if (!info.available) {
-        await tx.rollback();
-        return {
-          success: false,
-          code: "ALREADY_USED",
-          message: `Label ${labelCode} sudah terpakai`,
-        };
-      }
-      if (info.idWarehouse !== whAsal) {
-        await tx.rollback();
-        return {
-          success: false,
-          code: "WAREHOUSE_MISMATCH",
-          message: `Label ${labelCode} tidak berada di warehouse asal yang dipilih`,
-        };
-      }
-      if (await _isInTransit(tx, labelCode)) {
-        await tx.rollback();
-        return {
-          success: false,
-          code: "LABEL_IN_TRANSIT",
-          message: `Label ${labelCode} sedang dalam proses Goods Transfer lain`,
-        };
-      }
-      items.push({ labelCode, ...info });
+    const headerRes = await new sql.Request(tx)
+      .input("No", sql.VarChar(20), no)
+      .query(`SELECT NoTransfer, Status FROM dbo.GoodsTransfer_h WITH (UPDLOCK, HOLDLOCK) WHERE NoTransfer = @No`);
+    const header = headerRes.recordset[0];
+    if (!header) {
+      await tx.rollback();
+      return { success: false, code: "NOT_FOUND", message: "Transfer tidak ditemukan" };
+    }
+    if (header.Status !== "IN_TRANSIT") {
+      await tx.rollback();
+      return {
+        success: false,
+        code: "INVALID_STATUS",
+        message: `Transfer sudah berstatus ${header.Status}, tidak bisa dikirim lagi`,
+      };
     }
 
-    const noTransfer = await generateNextCode(tx, {
-      tableName: "dbo.GoodsTransfer_h",
-      columnName: "NoTransfer",
-      prefix: "GT.",
-      width: 10,
-    });
-
-    await new sql.Request(tx)
-      .input("NoTransfer", sql.VarChar(20), noTransfer)
-      .input("TanggalKirim", sql.Date, tanggalKirim)
-      .input("IdWarehouseAsal", sql.Int, whAsal)
-      .input("IdWarehouseTujuan", sql.Int, whTujuan)
-      .input("IdUsernameKirim", sql.Int, actorId)
-      .input("Catatan", sql.VarChar(500), catatan || null).query(`
-        INSERT INTO dbo.GoodsTransfer_h
-          (NoTransfer, TanggalKirim, IdWarehouseAsal, IdWarehouseTujuan, IdUsernameKirim, Catatan)
-        VALUES
-          (@NoTransfer, @TanggalKirim, @IdWarehouseAsal, @IdWarehouseTujuan, @IdUsernameKirim, @Catatan)
-      `);
-
-    for (const item of items) {
-      await new sql.Request(tx)
-        .input("NoTransfer", sql.VarChar(20), noTransfer)
-        .input("LabelCode", sql.VarChar(50), item.labelCode)
-        .input("PrefixKategori", sql.VarChar(10), item.prefix)
-        .input("BlokAsal", sql.VarChar(50), item.blok)
-        .input("IdLokasiAsal", sql.Int, item.idLokasi).query(`
-          INSERT INTO dbo.GoodsTransferItem
-            (NoTransfer, LabelCode, PrefixKategori, BlokAsal, IdLokasiAsal)
-          VALUES
-            (@NoTransfer, @LabelCode, @PrefixKategori, @BlokAsal, @IdLokasiAsal)
-        `);
+    const chkRes = await new sql.Request(tx).input("No", sql.VarChar(20), no).query(`
+      SELECT
+        (SELECT COUNT(1) FROM dbo.GoodsTransferItem_d WHERE NoTransfer = @No) AS TotalLines,
+        (SELECT COUNT(1) FROM dbo.GoodsTransferItem_d d
+          WHERE d.NoTransfer = @No
+            AND ISNULL((
+              SELECT SUM(s.Pcs) FROM dbo.GoodsTransferItemScan_d s
+              WHERE s.NoTransfer = d.NoTransfer AND s.KodeKategori = d.KodeKategori
+                AND s.IdJenis = d.IdJenis
+            ), 0) < d.Pcs) AS UnfilledLines
+    `);
+    const { TotalLines, UnfilledLines } = chkRes.recordset[0];
+    if (Number(TotalLines) === 0 || Number(UnfilledLines) > 0) {
+      await tx.rollback();
+      return {
+        success: false,
+        code: "NOT_FULFILLED",
+        message: "Masih ada permintaan yang belum terpenuhi — tidak bisa dikirim",
+      };
     }
+
+    await new sql.Request(tx).input("No", sql.VarChar(20), no).query(`
+      UPDATE dbo.GoodsTransfer_h SET Status = 'SHIPPED', UpdatedAt = GETDATE()
+      WHERE NoTransfer = @No AND Status = 'IN_TRANSIT'
+    `);
 
     await tx.commit();
-
     return {
       success: true,
-      code: "CREATED",
-      message: `Goods Transfer ${noTransfer} berhasil dibuat`,
-      data: { noTransfer, itemCount: items.length },
+      code: "SHIPPED",
+      message: `Transfer ${no} ditandai dikirim`,
+      data: { noTransfer: no },
     };
   } catch (err) {
     if (began) {
@@ -303,363 +285,14 @@ async function createGoodsTransfer({
   }
 }
 
-async function _getHeader(runner, noTransfer) {
-  const req = new sql.Request(runner);
-  const res = await req.input("NoTransfer", sql.VarChar(20), noTransfer).query(`
-      SELECT h.*, whAsal.NamaWarehouse AS NamaWarehouseAsal, whTujuan.NamaWarehouse AS NamaWarehouseTujuan,
-             uKirim.Username AS UsernameKirim, uTerima.Username AS UsernameTerima
-      FROM dbo.GoodsTransfer_h h
-      LEFT JOIN dbo.MstWarehouse whAsal ON whAsal.IdWarehouse = h.IdWarehouseAsal
-      LEFT JOIN dbo.MstWarehouse whTujuan ON whTujuan.IdWarehouse = h.IdWarehouseTujuan
-      LEFT JOIN dbo.MstUsername uKirim ON uKirim.IdUsername = h.IdUsernameKirim
-      LEFT JOIN dbo.MstUsername uTerima ON uTerima.IdUsername = h.IdUsernameTerima
-      WHERE h.NoTransfer = @NoTransfer
-    `);
-  return res.recordset[0] || null;
-}
-
-async function getDetail(noTransfer) {
-  const pool = await poolPromise;
-  const header = await _getHeader(pool, noTransfer);
-  if (!header) {
-    return { success: false, code: "NOT_FOUND", message: "Transfer tidak ditemukan" };
-  }
-  const itemsRes = await pool
-    .request()
-    .input("NoTransfer", sql.VarChar(20), noTransfer)
-    .query(`SELECT * FROM dbo.GoodsTransferItem WHERE NoTransfer = @NoTransfer ORDER BY IdTransferItem`);
-
-  // Lengkapi tiap item dengan ringkasan label (jenis/kategori/uom/qty/berat) —
-  // sumber sama dengan yang dipakai layar Create (inspect-label), supaya
-  // daftar label di detail transfer tampil konsisten.
-  const items = await Promise.all(
-    itemsRes.recordset.map(async (item) => {
-      const summary = await labelService.getLabelSummaryByCode(item.LabelCode);
-      return {
-        ...item,
-        NamaJenis: summary?.NamaJenis ?? null,
-        Kategori: summary?.Kategori ?? null,
-        Uom: summary?.Uom ?? null,
-        Qty: summary?.Qty ?? null,
-        Berat: summary?.Berat ?? null,
-      };
-    }),
-  );
-
-  return {
-    success: true,
-    data: { header, items },
-  };
-}
-
-async function listAll({ status, page = 1, limit = 50 }) {
-  const pool = await poolPromise;
-  const offset = (page - 1) * limit;
-  const req = pool.request();
-  let where = "";
-  if (status) {
-    req.input("Status", sql.VarChar(20), status);
-    where = "WHERE Status = @Status";
-  }
-  req.input("Offset", sql.Int, offset).input("Limit", sql.Int, limit);
-
-  const res = await req.query(`
-    SELECT h.*, whAsal.NamaWarehouse AS NamaWarehouseAsal, whTujuan.NamaWarehouse AS NamaWarehouseTujuan,
-           uKirim.Username AS UsernameKirim,
-           (SELECT COUNT(*) FROM dbo.GoodsTransferItem gi WHERE gi.NoTransfer = h.NoTransfer) AS ItemCount
-    FROM dbo.GoodsTransfer_h h
-    LEFT JOIN dbo.MstWarehouse whAsal ON whAsal.IdWarehouse = h.IdWarehouseAsal
-    LEFT JOIN dbo.MstWarehouse whTujuan ON whTujuan.IdWarehouse = h.IdWarehouseTujuan
-    LEFT JOIN dbo.MstUsername uKirim ON uKirim.IdUsername = h.IdUsernameKirim
-    ${where}
-    ORDER BY h.DateTimeKirim DESC
-    OFFSET @Offset ROWS FETCH NEXT @Limit ROWS ONLY
-  `);
-  return { success: true, data: res.recordset };
-}
-
-async function listOutgoing({ idWarehouseAsal, status, page = 1, limit = 50 }) {
-  const pool = await poolPromise;
-  const offset = (page - 1) * limit;
-  const req = pool.request().input("IdWarehouseAsal", sql.Int, idWarehouseAsal);
-  let where = "WHERE h.IdWarehouseAsal = @IdWarehouseAsal";
-  if (status) {
-    req.input("Status", sql.VarChar(20), status);
-    where += " AND h.Status = @Status";
-  }
-  req.input("Offset", sql.Int, offset).input("Limit", sql.Int, limit);
-
-  const res = await req.query(`
-    SELECT h.*, whAsal.NamaWarehouse AS NamaWarehouseAsal, whTujuan.NamaWarehouse AS NamaWarehouseTujuan,
-           uKirim.Username AS UsernameKirim,
-           (SELECT COUNT(*) FROM dbo.GoodsTransferItem gi WHERE gi.NoTransfer = h.NoTransfer) AS ItemCount
-    FROM dbo.GoodsTransfer_h h
-    LEFT JOIN dbo.MstWarehouse whAsal ON whAsal.IdWarehouse = h.IdWarehouseAsal
-    LEFT JOIN dbo.MstWarehouse whTujuan ON whTujuan.IdWarehouse = h.IdWarehouseTujuan
-    LEFT JOIN dbo.MstUsername uKirim ON uKirim.IdUsername = h.IdUsernameKirim
-    ${where}
-    ORDER BY h.DateTimeKirim DESC
-    OFFSET @Offset ROWS FETCH NEXT @Limit ROWS ONLY
-  `);
-  return { success: true, data: res.recordset };
-}
-
-async function listIncoming({ idWarehouseTujuan, status, page = 1, limit = 50 }) {
-  const pool = await poolPromise;
-  const offset = (page - 1) * limit;
-  const req = pool.request().input("IdWarehouseTujuan", sql.Int, idWarehouseTujuan);
-  let where = "WHERE h.IdWarehouseTujuan = @IdWarehouseTujuan";
-  if (status) {
-    req.input("Status", sql.VarChar(20), status);
-    where += " AND h.Status = @Status";
-  }
-  req.input("Offset", sql.Int, offset).input("Limit", sql.Int, limit);
-
-  const res = await req.query(`
-    SELECT h.*, whAsal.NamaWarehouse AS NamaWarehouseAsal, whTujuan.NamaWarehouse AS NamaWarehouseTujuan,
-           uKirim.Username AS UsernameKirim,
-           (SELECT COUNT(*) FROM dbo.GoodsTransferItem gi WHERE gi.NoTransfer = h.NoTransfer) AS ItemCount
-    FROM dbo.GoodsTransfer_h h
-    LEFT JOIN dbo.MstWarehouse whAsal ON whAsal.IdWarehouse = h.IdWarehouseAsal
-    LEFT JOIN dbo.MstWarehouse whTujuan ON whTujuan.IdWarehouse = h.IdWarehouseTujuan
-    LEFT JOIN dbo.MstUsername uKirim ON uKirim.IdUsername = h.IdUsernameKirim
-    ${where}
-    ORDER BY h.DateTimeKirim DESC
-    OFFSET @Offset ROWS FETCH NEXT @Limit ROWS ONLY
-  `);
-  return { success: true, data: res.recordset };
-}
-
-async function cancelGoodsTransfer({ noTransfer, actorId, actorUsername, requestId }) {
-  const pool = await poolPromise;
-  const tx = new sql.Transaction(pool);
-  let began = false;
-
-  try {
-    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-    began = true;
-
-    await applyAuditContext(new sql.Request(tx), { actorId, actorUsername, requestId });
-
-    const headerReq = new sql.Request(tx);
-    const headerRes = await headerReq
-      .input("NoTransfer", sql.VarChar(20), noTransfer)
-      .query(`SELECT * FROM dbo.GoodsTransfer_h WITH (UPDLOCK, HOLDLOCK) WHERE NoTransfer = @NoTransfer`);
-    const header = headerRes.recordset[0];
-
-    if (!header) {
-      await tx.rollback();
-      return { success: false, code: "NOT_FOUND", message: "Transfer tidak ditemukan" };
-    }
-    if (header.Status !== "IN_TRANSIT") {
-      await tx.rollback();
-      return {
-        success: false,
-        code: "INVALID_STATUS",
-        message: `Transfer sudah berstatus ${header.Status}, tidak bisa dibatalkan`,
-      };
-    }
-
-    await new sql.Request(tx)
-      .input("NoTransfer", sql.VarChar(20), noTransfer)
-      .query(`UPDATE dbo.GoodsTransferItem SET StatusItem = 'CANCELLED', UpdatedAt = GETDATE() WHERE NoTransfer = @NoTransfer`);
-
-    await new sql.Request(tx)
-      .input("NoTransfer", sql.VarChar(20), noTransfer)
-      .input("IdUsernameCancel", sql.Int, actorId).query(`
-        UPDATE dbo.GoodsTransfer_h
-        SET Status = 'CANCELLED', IdUsernameCancel = @IdUsernameCancel, DateTimeCancel = GETDATE(), UpdatedAt = GETDATE()
-        WHERE NoTransfer = @NoTransfer
-      `);
-
-    await tx.commit();
-    return { success: true, code: "CANCELLED", message: `Transfer ${noTransfer} dibatalkan` };
-  } catch (err) {
-    if (began) {
-      try {
-        await tx.rollback();
-      } catch (_) {}
-    }
-    throw err;
-  }
-}
-
-async function rejectGoodsTransfer({ noTransfer, alasanTolak, actorId, actorUsername, requestId }) {
-  if (!alasanTolak || !String(alasanTolak).trim()) {
-    return { success: false, code: "VALIDATION_ERROR", message: "alasanTolak wajib diisi" };
-  }
-
-  const pool = await poolPromise;
-  const tx = new sql.Transaction(pool);
-  let began = false;
-
-  try {
-    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-    began = true;
-
-    await applyAuditContext(new sql.Request(tx), { actorId, actorUsername, requestId });
-
-    const headerReq = new sql.Request(tx);
-    const headerRes = await headerReq
-      .input("NoTransfer", sql.VarChar(20), noTransfer)
-      .query(`SELECT * FROM dbo.GoodsTransfer_h WITH (UPDLOCK, HOLDLOCK) WHERE NoTransfer = @NoTransfer`);
-    const header = headerRes.recordset[0];
-
-    if (!header) {
-      await tx.rollback();
-      return { success: false, code: "NOT_FOUND", message: "Transfer tidak ditemukan" };
-    }
-    if (header.Status !== "IN_TRANSIT") {
-      await tx.rollback();
-      return {
-        success: false,
-        code: "INVALID_STATUS",
-        message: `Transfer sudah berstatus ${header.Status}, tidak bisa ditolak`,
-      };
-    }
-
-    await new sql.Request(tx)
-      .input("NoTransfer", sql.VarChar(20), noTransfer)
-      .query(`UPDATE dbo.GoodsTransferItem SET StatusItem = 'REJECTED', UpdatedAt = GETDATE() WHERE NoTransfer = @NoTransfer`);
-
-    await new sql.Request(tx)
-      .input("NoTransfer", sql.VarChar(20), noTransfer)
-      .input("IdUsernameTerima", sql.Int, actorId)
-      .input("AlasanTolak", sql.VarChar(500), alasanTolak).query(`
-        UPDATE dbo.GoodsTransfer_h
-        SET Status = 'REJECTED', IdUsernameTerima = @IdUsernameTerima, DateTimeTerima = GETDATE(),
-            TanggalTerima = CONVERT(date, GETDATE()), AlasanTolak = @AlasanTolak, UpdatedAt = GETDATE()
-        WHERE NoTransfer = @NoTransfer
-      `);
-
-    await tx.commit();
-    return { success: true, code: "REJECTED", message: `Transfer ${noTransfer} ditolak` };
-  } catch (err) {
-    if (began) {
-      try {
-        await tx.rollback();
-      } catch (_) {}
-    }
-    throw err;
-  }
-}
-
 /**
- * Accept: commit perpindahan warehouse ke tabel label asli.
- * items: [{ labelCode, blokTujuan, idLokasiTujuan }]
- */
-async function acceptGoodsTransfer({ noTransfer, items, actorId, actorUsername, requestId }) {
-  const itemInputs = Array.isArray(items) ? items : [];
-  if (itemInputs.length === 0) {
-    return { success: false, code: "VALIDATION_ERROR", message: "items wajib diisi" };
-  }
-  for (const it of itemInputs) {
-    if (!it.labelCode || !it.blokTujuan || toIntOrNull(it.idLokasiTujuan) === null) {
-      return {
-        success: false,
-        code: "VALIDATION_ERROR",
-        message: "Setiap item wajib memiliki labelCode, blokTujuan, dan idLokasiTujuan",
-      };
-    }
-  }
-
-  const pool = await poolPromise;
-  const tx = new sql.Transaction(pool);
-  let began = false;
-
-  try {
-    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-    began = true;
-
-    await applyAuditContext(new sql.Request(tx), { actorId, actorUsername, requestId });
-
-    const headerReq = new sql.Request(tx);
-    const headerRes = await headerReq
-      .input("NoTransfer", sql.VarChar(20), noTransfer)
-      .query(`SELECT * FROM dbo.GoodsTransfer_h WITH (UPDLOCK, HOLDLOCK) WHERE NoTransfer = @NoTransfer`);
-    const header = headerRes.recordset[0];
-
-    if (!header) {
-      await tx.rollback();
-      return { success: false, code: "NOT_FOUND", message: "Transfer tidak ditemukan" };
-    }
-    if (header.Status !== "IN_TRANSIT") {
-      await tx.rollback();
-      return {
-        success: false,
-        code: "INVALID_STATUS",
-        message: `Transfer sudah berstatus ${header.Status}, tidak bisa diterima`,
-      };
-    }
-
-    const dbItemsRes = await new sql.Request(tx)
-      .input("NoTransfer", sql.VarChar(20), noTransfer)
-      .query(`SELECT * FROM dbo.GoodsTransferItem WHERE NoTransfer = @NoTransfer`);
-    const dbItems = dbItemsRes.recordset;
-
-    const inputByLabel = new Map(itemInputs.map((it) => [it.labelCode, it]));
-    for (const dbItem of dbItems) {
-      const input = inputByLabel.get(dbItem.LabelCode);
-      if (!input) {
-        await tx.rollback();
-        return {
-          success: false,
-          code: "VALIDATION_ERROR",
-          message: `Item untuk label ${dbItem.LabelCode} belum diberi lokasi tujuan`,
-        };
-      }
-
-      const tableName = resolveLabelTable(dbItem.PrefixKategori);
-      const labelCol = resolveLabelColExpr(dbItem.PrefixKategori);
-      const blokTujuan = normBlok(input.blokTujuan);
-      const idLokasiTujuan = toIntOrNull(input.idLokasiTujuan);
-
-      await new sql.Request(tx)
-        .input("Blok", sql.VarChar(50), blokTujuan)
-        .input("IdLokasi", sql.Int, idLokasiTujuan)
-        .input("IdWarehouse", sql.Int, header.IdWarehouseTujuan)
-        .input("LabelCode", sql.NVarChar(50), dbItem.LabelCode).query(`
-          UPDATE ${tableName}
-          SET Blok = @Blok, IdLokasi = @IdLokasi, IdWarehouse = @IdWarehouse
-          WHERE ${labelCol} = @LabelCode
-        `);
-
-      await new sql.Request(tx)
-        .input("IdTransferItem", sql.Int, dbItem.IdTransferItem)
-        .input("BlokTujuan", sql.VarChar(50), blokTujuan)
-        .input("IdLokasiTujuan", sql.Int, idLokasiTujuan).query(`
-          UPDATE dbo.GoodsTransferItem
-          SET StatusItem = 'RECEIVED', BlokTujuan = @BlokTujuan, IdLokasiTujuan = @IdLokasiTujuan, UpdatedAt = GETDATE()
-          WHERE IdTransferItem = @IdTransferItem
-        `);
-    }
-
-    await new sql.Request(tx)
-      .input("NoTransfer", sql.VarChar(20), noTransfer)
-      .input("IdUsernameTerima", sql.Int, actorId).query(`
-        UPDATE dbo.GoodsTransfer_h
-        SET Status = 'RECEIVED', IdUsernameTerima = @IdUsernameTerima, DateTimeTerima = GETDATE(),
-            TanggalTerima = CONVERT(date, GETDATE()), UpdatedAt = GETDATE()
-        WHERE NoTransfer = @NoTransfer
-      `);
-
-    await tx.commit();
-    return { success: true, code: "RECEIVED", message: `Transfer ${noTransfer} diterima` };
-  } catch (err) {
-    if (began) {
-      try {
-        await tx.rollback();
-      } catch (_) {}
-    }
-    throw err;
-  }
-}
-
-/**
- * Terima 1 label lewat scan: resolve transfer & item aktif untuk labelCode
- * ini, commit perpindahan warehouse/blok/lokasi ke tabel label asli, tandai
- * item RECEIVED, dan kalau ini item terakhir yang IN_TRANSIT pada transfer
- * tsb, header ikut ditandai RECEIVED juga.
+ * Terima 1 label lewat scan (sisi tujuan / fitur In Transit): commit
+ * perpindahan warehouse label fisik ke tujuan, tandai baris scan RECEIVED,
+ * dan kalau ini scan IN_TRANSIT terakhir untuk transfer tsb, transfer selesai.
+ *
+ * Catatan (Open Question 3): hanya mendukung pemindahan SATU label utuh —
+ * pcs baris scan harus mewakili seluruh sisa pcs label. Terima sebagian
+ * (partial) belum didukung.
  */
 async function acceptScannedItem({
   labelCode,
@@ -689,16 +322,27 @@ async function acceptScannedItem({
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
     began = true;
 
-    await applyAuditContext(new sql.Request(tx), { actorId, actorUsername, requestId });
+    await applyAuditContext(new sql.Request(tx), {
+      actorId,
+      actorUsername,
+      requestId,
+    });
 
-    const itemRes = await new sql.Request(tx)
+    await assertNotLocked({
+      date: new Date(),
+      runner: tx,
+      action: "menerima Goods Transfer",
+      useLock: true,
+    });
+
+    const scanRes = await new sql.Request(tx)
       .input("LabelCode", sql.VarChar(50), code).query(`
-        SELECT TOP 1 * FROM dbo.GoodsTransferItem WITH (UPDLOCK, HOLDLOCK)
-        WHERE LabelCode = @LabelCode AND StatusItem = 'IN_TRANSIT'
+        SELECT TOP 1 * FROM dbo.GoodsTransferItemScan_d WITH (UPDLOCK, HOLDLOCK)
+        WHERE LabelCode = @LabelCode AND IsReceived = 0
+        ORDER BY IdScan ASC
       `);
-    const item = itemRes.recordset[0];
-
-    if (!item) {
+    const scan = scanRes.recordset[0];
+    if (!scan) {
       await tx.rollback();
       return {
         success: false,
@@ -708,75 +352,127 @@ async function acceptScannedItem({
     }
 
     const headerRes = await new sql.Request(tx)
-      .input("NoTransfer", sql.VarChar(20), item.NoTransfer)
+      .input("NoTransfer", sql.VarChar(20), scan.NoTransfer)
       .query(`SELECT * FROM dbo.GoodsTransfer_h WITH (UPDLOCK, HOLDLOCK) WHERE NoTransfer = @NoTransfer`);
     const header = headerRes.recordset[0];
-
-    if (!header || header.Status !== "IN_TRANSIT") {
+    if (!header) {
+      await tx.rollback();
+      return { success: false, code: "NOT_FOUND", message: "Transfer tidak ditemukan" };
+    }
+    if (header.Status !== "SHIPPED") {
       await tx.rollback();
       return {
         success: false,
         code: "INVALID_STATUS",
-        message: `Transfer ${item.NoTransfer} sudah tidak aktif`,
+        message:
+          header.Status === "RECEIVED"
+            ? `Transfer ${scan.NoTransfer} sudah selesai diterima`
+            : `Transfer ${scan.NoTransfer} belum ditandai "Kirim"`,
       };
     }
 
-    // Guard: blok tujuan yang dipilih user harus benar milik warehouse tujuan transfer ini,
-    // supaya scan label yang seharusnya untuk transfer lain tidak nyasar ke lokasi salah.
-    const blokRes = await new sql.Request(tx)
-      .input("Blok", sql.VarChar(100), blok)
-      .query(`SELECT TOP 1 IdWarehouse FROM dbo.MstBlok WHERE Blok = @Blok`);
-    const blokWarehouse = toIntOrNull(blokRes.recordset[0]?.IdWarehouse);
-
+    const blokWarehouse = await _resolveWarehouseForBlok(tx, blok);
     if (blokWarehouse === null || blokWarehouse !== header.IdWarehouseTujuan) {
       await tx.rollback();
       return {
         success: false,
         code: "WAREHOUSE_MISMATCH",
-        message: `Label ${code} adalah bagian dari transfer ke warehouse lain, bukan tujuan yang dipilih`,
+        message: `Blok ${blok} bukan milik warehouse tujuan transfer ${scan.NoTransfer}`,
       };
     }
 
-    const tableName = resolveLabelTable(item.PrefixKategori);
-    const labelCol = resolveLabelColExpr(item.PrefixKategori);
+    const cfg = CATEGORY_CONFIG[scan.KodeKategori];
+    if (!cfg) {
+      await tx.rollback();
+      return {
+        success: false,
+        code: "VALIDATION_ERROR",
+        message: `Kategori ${scan.KodeKategori} tidak dikenali`,
+      };
+    }
 
+    const parentRes = await new sql.Request(tx)
+      .input("NoLabel", sql.VarChar(50), code).query(`
+        SELECT Pcs AS ParentPcs
+        FROM dbo.${cfg.parentTable} WITH (UPDLOCK, HOLDLOCK)
+        WHERE ${cfg.parentColumn} = @NoLabel AND DateUsage IS NULL
+      `);
+    const parent = parentRes.recordset[0];
+    if (!parent) {
+      await tx.rollback();
+      return {
+        success: false,
+        code: "INVALID_STATUS",
+        message: `Label ${code} sudah tidak tersedia di gudang asal`,
+      };
+    }
+
+    const partialRes = await new sql.Request(tx)
+      .input("NoLabel", sql.VarChar(50), code).query(`
+        SELECT ISNULL(SUM(Pcs), 0) AS PartialPcs
+        FROM dbo.${cfg.partialTable}
+        WHERE ${cfg.partialParentColumn} = @NoLabel
+      `);
+    const availablePcs = Math.max(
+      Math.round(
+        Number(parent.ParentPcs || 0) -
+          Number(partialRes.recordset[0]?.PartialPcs || 0),
+      ),
+      0,
+    );
+
+    if (Number(scan.Pcs) < availablePcs) {
+      await tx.rollback();
+      return {
+        success: false,
+        code: "PARTIAL_NOT_SUPPORTED",
+        message:
+          `Label ${code} berisi ${availablePcs} pcs tetapi baris scan hanya ${scan.Pcs} pcs. ` +
+          `Terima sebagian (partial) belum didukung — scan harus mewakili seluruh label.`,
+      };
+    }
+
+    // Pindahkan label fisik ke warehouse/blok/lokasi tujuan.
     await new sql.Request(tx)
       .input("Blok", sql.VarChar(50), blok)
       .input("IdLokasi", sql.Int, idLokasi)
       .input("IdWarehouse", sql.Int, header.IdWarehouseTujuan)
-      .input("LabelCode", sql.NVarChar(50), code).query(`
-        UPDATE ${tableName}
+      .input("NoLabel", sql.VarChar(50), code).query(`
+        UPDATE dbo.${cfg.parentTable}
         SET Blok = @Blok, IdLokasi = @IdLokasi, IdWarehouse = @IdWarehouse
-        WHERE ${labelCol} = @LabelCode
+        WHERE ${cfg.parentColumn} = @NoLabel
       `);
 
     await new sql.Request(tx)
-      .input("IdTransferItem", sql.Int, item.IdTransferItem)
+      .input("IdScan", sql.Int, scan.IdScan)
       .input("BlokTujuan", sql.VarChar(50), blok)
-      .input("IdLokasiTujuan", sql.Int, idLokasi).query(`
-        UPDATE dbo.GoodsTransferItem
-        SET StatusItem = 'RECEIVED', BlokTujuan = @BlokTujuan, IdLokasiTujuan = @IdLokasiTujuan, UpdatedAt = GETDATE()
-        WHERE IdTransferItem = @IdTransferItem
+      .input("IdLokasiTujuan", sql.Int, idLokasi)
+      .input("IdUsernameTerima", sql.Int, actorId).query(`
+        UPDATE dbo.GoodsTransferItemScan_d
+        SET IsReceived = 1, BlokTujuan = @BlokTujuan, IdLokasiTujuan = @IdLokasiTujuan,
+            IdUsernameTerima = @IdUsernameTerima,
+            DateTimeTerima = SYSUTCDATETIME(), UpdatedAt = GETDATE()
+        WHERE IdScan = @IdScan
       `);
 
     const remainingRes = await new sql.Request(tx)
-      .input("NoTransfer", sql.VarChar(20), item.NoTransfer).query(`
-        SELECT COUNT(*) AS Remaining FROM dbo.GoodsTransferItem
-        WHERE NoTransfer = @NoTransfer AND StatusItem = 'IN_TRANSIT'
+      .input("NoTransfer", sql.VarChar(20), scan.NoTransfer).query(`
+        SELECT COUNT(1) AS Remaining FROM dbo.GoodsTransferItemScan_d
+        WHERE NoTransfer = @NoTransfer AND IsReceived = 0
       `);
-    const remaining = remainingRes.recordset[0]?.Remaining ?? 0;
+    const remaining = Number(remainingRes.recordset[0]?.Remaining || 0);
 
-    let transferCompleted = false;
+    // Semua label diterima -> tandai header RECEIVED.
     if (remaining === 0) {
       await new sql.Request(tx)
-        .input("NoTransfer", sql.VarChar(20), item.NoTransfer)
+        .input("NoTransfer", sql.VarChar(20), scan.NoTransfer)
         .input("IdUsernameTerima", sql.Int, actorId).query(`
           UPDATE dbo.GoodsTransfer_h
-          SET Status = 'RECEIVED', IdUsernameTerima = @IdUsernameTerima, DateTimeTerima = GETDATE(),
-              TanggalTerima = CONVERT(date, GETDATE()), UpdatedAt = GETDATE()
-          WHERE NoTransfer = @NoTransfer
+          SET Status = 'RECEIVED', IdUsernameTerima = @IdUsernameTerima,
+              DateTimeTerima = GETDATE(), TanggalTerima = CONVERT(date, GETDATE()),
+              UpdatedAt = GETDATE()
+          WHERE NoTransfer = @NoTransfer AND Status = 'SHIPPED'
         `);
-      transferCompleted = true;
     }
 
     await tx.commit();
@@ -787,10 +483,10 @@ async function acceptScannedItem({
       message: `Label ${code} berhasil diterima`,
       data: {
         labelCode: code,
-        noTransfer: item.NoTransfer,
-        prefixKategori: item.PrefixKategori,
+        noTransfer: scan.NoTransfer,
+        kodeKategori: scan.KodeKategori,
         remainingItems: remaining,
-        transferCompleted,
+        transferCompleted: remaining === 0,
       },
     };
   } catch (err) {
@@ -803,15 +499,69 @@ async function acceptScannedItem({
   }
 }
 
+/**
+ * Batalkan 1 baris scan yang belum diterima penerima (IsReceived = 0) —
+ * menghapus barisnya sehingga pcs kembali tersedia untuk label tsb.
+ */
+async function undoScan({ idScan, actorId, actorUsername, requestId }) {
+  const id = toIntOrNull(idScan);
+  if (id === null) {
+    return { success: false, code: "VALIDATION_ERROR", message: "idScan tidak valid" };
+  }
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  let began = false;
+
+  try {
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+    began = true;
+
+    await applyAuditContext(new sql.Request(tx), {
+      actorId,
+      actorUsername,
+      requestId,
+    });
+
+    // Hanya boleh undo kalau transfer masih IN_TRANSIT (belum ditekan "Kirim").
+    const res = await new sql.Request(tx)
+      .input("IdScan", sql.Int, id).query(`
+        DELETE s
+        FROM dbo.GoodsTransferItemScan_d s
+        INNER JOIN dbo.GoodsTransfer_h h ON h.NoTransfer = s.NoTransfer
+        WHERE s.IdScan = @IdScan AND s.IsReceived = 0
+          AND h.Status = 'IN_TRANSIT'
+      `);
+
+    if (!res.rowsAffected?.[0]) {
+      await tx.rollback();
+      return {
+        success: false,
+        code: "INVALID_STATUS",
+        message:
+          "Baris scan tidak bisa dibatalkan (sudah diterima atau transfer sudah dikirim)",
+      };
+    }
+
+    await tx.commit();
+    return { success: true, code: "DELETED", message: "Scan dibatalkan" };
+  } catch (err) {
+    if (began) {
+      try {
+        await tx.rollback();
+      } catch (_) {}
+    }
+    throw err;
+  }
+}
+
 module.exports = {
-  inspectLabel,
-  createGoodsTransfer,
   getDetail,
   listAll,
   listOutgoing,
   listIncoming,
-  cancelGoodsTransfer,
-  rejectGoodsTransfer,
-  acceptGoodsTransfer,
+  scanLabel,
+  markKirim,
   acceptScannedItem,
+  undoScan,
 };

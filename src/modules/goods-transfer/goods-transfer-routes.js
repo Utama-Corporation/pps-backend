@@ -8,11 +8,6 @@ const goodsTransferController = require("./goods-transfer-controller");
 // urutan penting: verify → attach → require → controller
 router.use(verifyToken, attachPermissions);
 
-router.post(
-  "/",
-  requirePermission("goods_transfer:create"),
-  goodsTransferController.createHandler,
-);
 router.get(
   "/",
   requirePermission("goods_transfer:read"),
@@ -29,10 +24,15 @@ router.get(
   goodsTransferController.listIncomingHandler,
 );
 // harus didaftarkan sebelum "/:noTransfer" agar tidak ketangkap sebagai param
-router.get(
-  "/inspect-label",
-  requirePermission("goods_transfer:create"),
-  goodsTransferController.inspectLabelHandler,
+router.post(
+  "/accept-scan",
+  requirePermission("goods_transfer:update"),
+  goodsTransferController.acceptScanHandler,
+);
+router.delete(
+  "/scan/:idScan",
+  requirePermission("goods_transfer:update"),
+  goodsTransferController.undoScanHandler,
 );
 router.get(
   "/:noTransfer",
@@ -40,24 +40,14 @@ router.get(
   goodsTransferController.detailHandler,
 );
 router.post(
-  "/:noTransfer/cancel",
+  "/:noTransfer/scan",
   requirePermission("goods_transfer:update"),
-  goodsTransferController.cancelHandler,
+  goodsTransferController.scanHandler,
 );
 router.post(
-  "/:noTransfer/reject",
+  "/:noTransfer/kirim",
   requirePermission("goods_transfer:update"),
-  goodsTransferController.rejectHandler,
-);
-router.post(
-  "/:noTransfer/accept",
-  requirePermission("goods_transfer:update"),
-  goodsTransferController.acceptHandler,
-);
-router.post(
-  "/accept-scan",
-  requirePermission("goods_transfer:update"),
-  goodsTransferController.acceptScanHandler,
+  goodsTransferController.kirimHandler,
 );
 
 module.exports = router;

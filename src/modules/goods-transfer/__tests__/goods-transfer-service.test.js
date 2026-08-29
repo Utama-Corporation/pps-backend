@@ -3,25 +3,15 @@
 jest.mock("../../../core/config/db", () => {
   const mQuery = jest.fn();
   const MockRequest = jest.fn().mockImplementation(() => {
-    const req = {
-      input: () => req,
-      query: mQuery,
-    };
+    const req = { input: () => req, query: mQuery };
     return req;
   });
-
-  const mBegin = jest.fn();
-  const mCommit = jest.fn();
-  const mRollback = jest.fn();
-
   const MockTransaction = jest.fn().mockImplementation(() => ({
-    begin: mBegin,
-    commit: mCommit,
-    rollback: mRollback,
+    begin: jest.fn(),
+    commit: jest.fn(),
+    rollback: jest.fn(),
   }));
-
   const makeType = (name) => jest.fn(() => name);
-
   const mPool = { request: () => new MockRequest() };
 
   return {
@@ -35,66 +25,54 @@ jest.mock("../../../core/config/db", () => {
       Transaction: MockTransaction,
     },
     poolPromise: Promise.resolve(mPool),
-    __mocks: { mQuery, MockRequest, MockTransaction, mBegin, mCommit, mRollback, mPool },
   };
 });
 
 const service = require("../goods-transfer-service");
 
-describe("goods-transfer-service validation guards", () => {
-  test("createGoodsTransfer menolak jika idWarehouseAsal/Tujuan kosong", async () => {
-    const result = await service.createGoodsTransfer({
-      idWarehouseAsal: null,
-      idWarehouseTujuan: 2,
-      labelCodes: ["A.0000000001-1"],
+describe("goods-transfer scanLabel guards", () => {
+  const ctx = { actorId: 7, actorUsername: "tester", requestId: "" };
+
+  test("menolak noTransfer kosong", async () => {
+    await expect(service.scanLabel("", "BA.0000000001", ctx)).rejects.toThrow(
+      /noTransfer wajib/,
+    );
+  });
+
+  test("menolak noLabel kosong", async () => {
+    await expect(service.scanLabel("GT.0000000001", "", ctx)).rejects.toThrow(
+      /noLabel wajib/,
+    );
+  });
+
+  test("menolak label bukan kategori BA./BB.", async () => {
+    await expect(
+      service.scanLabel("GT.0000000001", "A.0000000001-1", ctx),
+    ).rejects.toThrow(/bukan kategori yang valid/);
+  });
+
+  test("menolak actorId tidak valid", async () => {
+    await expect(
+      service.scanLabel("GT.0000000001", "BA.0000000001", { actorId: 0 }),
+    ).rejects.toThrow(/actorId wajib/);
+  });
+});
+
+describe("goods-transfer acceptScannedItem guards", () => {
+  test("menolak jika labelCode/blokTujuan/idLokasiTujuan tidak lengkap", async () => {
+    const result = await service.acceptScannedItem({
+      labelCode: "BA.0000000001",
+      blokTujuan: "A1",
+      idLokasiTujuan: null,
     });
     expect(result.success).toBe(false);
     expect(result.code).toBe("VALIDATION_ERROR");
   });
+});
 
-  test("createGoodsTransfer menolak jika warehouse asal = tujuan", async () => {
-    const result = await service.createGoodsTransfer({
-      idWarehouseAsal: 1,
-      idWarehouseTujuan: 1,
-      labelCodes: ["A.0000000001-1"],
-    });
-    expect(result.success).toBe(false);
-    expect(result.code).toBe("SAME_WAREHOUSE");
-  });
-
-  test("createGoodsTransfer menolak jika labelCodes kosong", async () => {
-    const result = await service.createGoodsTransfer({
-      idWarehouseAsal: 1,
-      idWarehouseTujuan: 2,
-      labelCodes: [],
-    });
-    expect(result.success).toBe(false);
-    expect(result.code).toBe("VALIDATION_ERROR");
-  });
-
-  test("rejectGoodsTransfer menolak jika alasanTolak kosong", async () => {
-    const result = await service.rejectGoodsTransfer({
-      noTransfer: "GT.0000000001",
-      alasanTolak: "",
-    });
-    expect(result.success).toBe(false);
-    expect(result.code).toBe("VALIDATION_ERROR");
-  });
-
-  test("acceptGoodsTransfer menolak jika items kosong", async () => {
-    const result = await service.acceptGoodsTransfer({
-      noTransfer: "GT.0000000001",
-      items: [],
-    });
-    expect(result.success).toBe(false);
-    expect(result.code).toBe("VALIDATION_ERROR");
-  });
-
-  test("acceptGoodsTransfer menolak jika item tidak lengkap (kurang idLokasiTujuan)", async () => {
-    const result = await service.acceptGoodsTransfer({
-      noTransfer: "GT.0000000001",
-      items: [{ labelCode: "A.0000000001-1", blokTujuan: "A1" }],
-    });
+describe("goods-transfer undoScan guards", () => {
+  test("menolak idScan tidak valid", async () => {
+    const result = await service.undoScan({ idScan: "abc" });
     expect(result.success).toBe(false);
     expect(result.code).toBe("VALIDATION_ERROR");
   });

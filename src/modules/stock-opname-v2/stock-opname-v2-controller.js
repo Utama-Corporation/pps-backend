@@ -20,16 +20,17 @@ async function listKategoriHandler(req, res) {
   );
 
   try {
-    const data = await stockOpnameV2Service.getAllKategoriWithStatus({
-      year,
-      month,
-    });
+    const [data, serverTime] = await Promise.all([
+      stockOpnameV2Service.getAllKategoriWithStatus({ year, month }),
+      stockOpnameV2Service.getServerTime(),
+    ]);
 
     if (!data || data.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Data kategori tidak ditemukan",
         data: [],
+        serverTime,
       });
     }
 
@@ -38,6 +39,7 @@ async function listKategoriHandler(req, res) {
       message: "Data kategori berhasil diambil",
       data,
       totalRecords: data.length,
+      serverTime,
     });
   } catch (error) {
     console.error("Error fetching kategori (stock-opname-v2):", error);

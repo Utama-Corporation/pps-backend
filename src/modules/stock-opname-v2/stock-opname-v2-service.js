@@ -40,6 +40,17 @@ const UNKNOWN_BLOK_CODE = "TIDAK_DIKETAHUI";
 const UNKNOWN_LOCATION_ID = 0;
 const UNKNOWN_LOCATION_LABEL = "Lokasi Tidak Diketahui";
 
+// Stock opname v2 memakai tanggal WIB (UTC+7), bukan UTC, supaya batas
+// "hari ini" mengikuti waktu operasional gudang di Indonesia.
+const WIB_OFFSET_MS = 7 * 60 * 60 * 1000;
+
+// Tanggal "hari ini" menurut WIB, dinormalisasi ke date-only (UTC-midnight dari
+// komponen Y/M/D WIB) supaya kompatibel dengan sql.Date dan helper
+// toDateOnly/formatYMD yang semuanya berbasis getUTC*.
+function wibTodayDateOnly() {
+  return toDateOnly(new Date(Date.now() + WIB_OFFSET_MS));
+}
+
 // ================================================================
 // Penugasan lokasi (MstUserLokasiAccess) — kepala gudang menugaskan user ke
 // lokasi UNTUK SATU SESI STOCK OPNAME tertentu (di-scope NoSO). Begitu NoSO
@@ -236,6 +247,44 @@ async function isUserAllowedForLokasi({
       ${noso ? "AND NoSO = @noso" : ""};
     `);
   return (result.recordset || []).length > 0;
+}
+
+// Info waktu yang dipakai server: waktu proses Node.js + waktu SQL Server.
+// Berguna untuk debugging beda zona waktu antara app, DB, dan client.
+async function getServerTime() {
+  const nodeNow = new Date();
+  let database = null;
+  try {
+    const pool = await poolPromise;
+    const res = await pool.request().query(`
+      SELECT
+        SYSDATETIMEOFFSET()        AS nowOffset,
+        SYSUTCDATETIME()           AS utc,
+        GETDATE()                  AS local,
+        SERVERPROPERTY('MachineName') AS machine
+    `);
+    const row = res.recordset?.[0] || {};
+    database = {
+      now: row.nowOffset ?? null,
+      utc: row.utc ?? null,
+      local: row.local ?? null,
+      machine: row.machine ?? null,
+    };
+  } catch (err) {
+    database = { error: err.message };
+  }
+
+  return {
+    node: {
+      iso: nodeNow.toISOString(),
+      epochMs: nodeNow.getTime(),
+      timezone:
+        Intl.DateTimeFormat().resolvedOptions().timeZone || process.env.TZ || null,
+      offsetMinutes: -nodeNow.getTimezoneOffset(),
+      local: nodeNow.toString(),
+    },
+    database,
+  };
 }
 
 async function getAllKategoriWithStatus({ year, month } = {}) {
@@ -562,9 +611,11 @@ async function previewStockOpnameLabelCount({ categoryId }) {
     throw badReq("categoryId wajib berupa integer valid");
   }
 
-  // Tanggal acuan sama seperti generate: selalu H-1 (UTC).
-  const todayUtc = toDateOnly(new Date());
-  const docDateOnly = new Date(todayUtc.getTime() - 24 * 60 * 60 * 1000);
+  // Sama seperti generate: tanggal dokumen = tanggal berjalan (WIB).
+  // Acuan snapshot: filter DateCreate < @tanggal (= hari ini WIB), sehingga
+  // stok yang diambil adalah yang dibuat s.d. H-1.
+  const docDateOnly = wibTodayDateOnly();
+  const snapshotCutoffDateOnly = docDateOnly;
 
   const pool = await poolPromise;
 
@@ -595,7 +646,7 @@ async function previewStockOpnameLabelCount({ categoryId }) {
   // detail jenis & berat/pcs-nya sebelum benar-benar generate.
   const breakdownReq = pool.request();
   breakdownReq.input("noso", sql.VarChar, "");
-  breakdownReq.input("tanggal", sql.Date, docDateOnly);
+  breakdownReq.input("tanggal", sql.Date, snapshotCutoffDateOnly);
 
   const breakdownRes = await breakdownReq.query(`
     ${cfg.cteSql || ""}
@@ -660,9 +711,12 @@ async function generateStockOpname({ categoryId, ctx }) {
   const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
   const requestId = String(ctx?.requestId || "").trim();
 
-  // Tanggal snapshot selalu H-1 (UTC), tidak lagi menerima input dari client.
-  const todayUtc = toDateOnly(new Date());
-  const docDateOnly = new Date(todayUtc.getTime() - 24 * 60 * 60 * 1000);
+  // Tanggal dokumen (StockOpname_h.Tanggal + kolom Tanggal snapshot) = tanggal
+  // berjalan menurut WIB; tidak lagi menerima input dari client.
+  const docDateOnly = wibTodayDateOnly();
+  // Acuan pengambilan stok: filter DateCreate < @tanggal. Dengan @tanggal =
+  // hari ini (WIB), stok yang masuk snapshot adalah yang dibuat s.d. H-1.
+  const snapshotCutoffDateOnly = docDateOnly;
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
@@ -719,7 +773,7 @@ async function generateStockOpname({ categoryId, ctx }) {
 
     const snapshotReq = new sql.Request(tx);
     snapshotReq.input("noso", sql.VarChar, stockOpnameNo);
-    snapshotReq.input("tanggal", sql.Date, docDateOnly);
+    snapshotReq.input("tanggal", sql.Date, snapshotCutoffDateOnly);
 
     const insertColumnsSql = cfg.insertColumns.join(", ");
     const result = await snapshotReq.query(`
@@ -2483,6 +2537,7 @@ async function deleteStockOpname({ stockOpnameNo, ctx }) {
 
 module.exports = {
   getAllKategori,
+  getServerTime,
   getAllKategoriWithStatus,
   getStockOpnameRiwayat,
   getJenisByKategori,

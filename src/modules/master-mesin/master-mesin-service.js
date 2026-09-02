@@ -779,16 +779,12 @@ async function getMixerByNoProduksi({
 // Khusus inject: MstShiftHourSet.IdBagian di-hardcode = 4 (bagian Inject)
 const ID_BAGIAN_SHIFT_INJECT = 4;
 
-async function getInjectByNoProduksi({
-  idBagianMesin = 4,
-  includeDisabled = true,
-}) {
+async function getInjectByNoProduksi({ includeDisabled = true } = {}) {
   const pool = await poolPromise;
   const request = pool.request();
-  request.input("IdBagianMesin", idBagianMesin);
   request.input("IdBagianShift", ID_BAGIAN_SHIFT_INJECT);
 
-  const whereEnable = includeDisabled ? "1=1" : "ISNULL(m.Enable, 1) = 1";
+  const whereEnable = includeDisabled ? "1=1" : "ISNULL(mi.Enable, 1) = 1";
 
   const query = `
     ;WITH CurrentCtx AS (
@@ -833,8 +829,8 @@ async function getInjectByNoProduksi({
       ORDER BY d.NoShift ASC
     )
     SELECT
-      m.IdMesin,
-      m.NamaMesin,
+      mi.IdMesin,
+      mi.NamaMesin,
       m.Bagian,
       m.IdBagianMesin,
       COALESCE(h.NoProduksi, pendingProd.NoProduksi) AS NoProduksi,
@@ -901,9 +897,9 @@ async function getInjectByNoProduksi({
         WHEN h.NoProduksi IS NULL THEN 'idle'
         ELSE 'aktif'
       END AS MachineStatus
-    FROM dbo.MstMesin m WITH (NOLOCK)
-    LEFT JOIN dbo.MstMesinInject mi WITH (NOLOCK)
-      ON mi.IdMesin = m.IdMesin
+    FROM dbo.MstMesinInject mi WITH (NOLOCK)
+    LEFT JOIN dbo.MstMesin m WITH (NOLOCK)
+      ON m.IdMesin = mi.IdMesin
     OUTER APPLY (
       SELECT TOP 1
         ih.NoProduksi,
@@ -917,7 +913,7 @@ async function getInjectByNoProduksi({
         ih.HourEnd
       FROM dbo.InjectProduksi_h ih WITH (NOLOCK)
       CROSS JOIN CurrentCtx c
-      WHERE ih.IdMesin = m.IdMesin
+      WHERE ih.IdMesin = mi.IdMesin
         AND CONVERT(date, ih.TglProduksi) = c.CurrentDate
         AND ih.Shift = (SELECT TOP 1 NoShift FROM ActiveShift)
         AND (
@@ -951,7 +947,7 @@ async function getInjectByNoProduksi({
         ph.HourEnd
       FROM dbo.InjectProduksi_h ph WITH (NOLOCK)
       CROSS JOIN CurrentCtx c
-      WHERE ph.IdMesin = m.IdMesin
+      WHERE ph.IdMesin = mi.IdMesin
         AND ph.IsComplete = 0
         AND (
           CONVERT(date, ph.TglProduksi) < c.CurrentDate
@@ -1083,8 +1079,7 @@ async function getInjectByNoProduksi({
     OUTER APPLY (SELECT TOP 1 * FROM ActiveShift) s
     CROSS JOIN CurrentCtx c
     WHERE ${whereEnable}
-      AND m.IdBagianMesin = @IdBagianMesin
-    ORDER BY m.NamaMesin ASC;
+    ORDER BY mi.NamaMesin ASC;
   `;
 
   const result = await request.query(query);

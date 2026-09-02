@@ -7,10 +7,20 @@ const { getBrowser } = require('./browser');
  * @param {Function} templateFn - function(data) => HTML string
  * @param {object} options
  * @param {string} options.width  - lebar halaman (default: '80mm')
+ * @param {string} options.height - tinggi halaman fix (mis. '40mm'). Jika di-set,
+ *                                  ukuran halaman dikunci dan tinggi konten TIDAK diukur dinamis.
  * @returns {Buffer} PDF buffer
  */
+const MM_TO_PX = 96 / 25.4; // 1mm @ 96dpi
+
+function mmToPx(value) {
+  const num = parseFloat(String(value));
+  return Math.ceil(num * MM_TO_PX);
+}
+
 async function generateLabelPdf(data, templateFn, options = {}) {
   const width = options.width || '80mm';
+  const fixedHeight = options.height || null;
 
   // 1. Generate QR code sebagai base64
   const qrValue = data.noLabel || data.kode || 'NO-CODE';
@@ -28,6 +38,22 @@ async function generateLabelPdf(data, templateFn, options = {}) {
   const page = await browser.newPage();
 
   try {
+    // Ukuran halaman fix (lebar x tinggi dikunci) — dipakai untuk label thermal berukuran tetap
+    if (fixedHeight) {
+      await page.setViewport({ width: mmToPx(width), height: mmToPx(fixedHeight) });
+      await page.setContent(html, { waitUntil: 'networkidle0' });
+
+      const pdf = await page.pdf({
+        width,
+        height: fixedHeight,
+        printBackground: true,
+        pageRanges: '1',
+        margin: { top: 0, right: 0, bottom: 0, left: 0 },
+      });
+
+      return pdf;
+    }
+
     // Set viewport lebar dulu, tinggi sementara (besar agar konten tidak terpotong)
     await page.setViewport({ width: 302, height: 3000 });
     await page.setContent(html, { waitUntil: 'networkidle0' });

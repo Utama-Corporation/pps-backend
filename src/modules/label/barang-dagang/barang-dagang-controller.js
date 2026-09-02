@@ -126,7 +126,10 @@ exports.generatePdf = async (req, res) => {
       watermarkText: "",
     };
 
-    const pdfBuffer = await generateLabelPdf(data, buildBarangDagangLabelHtml);
+    const pdfBuffer = await generateLabelPdf(data, buildBarangDagangLabelHtml, {
+      width: "60mm",
+      height: "40mm",
+    });
 
     res.set({
       "Content-Type": "application/pdf",

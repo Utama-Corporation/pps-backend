@@ -87,11 +87,13 @@ const PRODUKSI_MESIN_SOURCES = [
   },
 
   // INJECT: "S.0000029953"
+  // Mesin inject lepas dari MstMesin — master & lokasi diambil dari MstMesinInject.
   {
     prefix: "S.",
     table: "InjectProduksi_h",
     codeColumn: "NoProduksi",
     idMesinColumn: "IdMesin",
+    mesinTable: "MstMesinInject",
   },
 ];
 

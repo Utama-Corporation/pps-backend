@@ -831,8 +831,8 @@ async function getInjectByNoProduksi({ includeDisabled = true } = {}) {
     SELECT
       mi.IdMesin,
       mi.NamaMesin,
-      m.Bagian,
-      m.IdBagianMesin,
+      'Inject' AS Bagian,
+      @IdBagianShift AS IdBagianMesin,
       COALESCE(h.NoProduksi, pendingProd.NoProduksi) AS NoProduksi,
       CONVERT(date, COALESCE(h.TglProduksi, pendingProd.TglProduksi)) AS TglProduksi,
       COALESCE(h.IdRegu, pendingProd.IdRegu) AS IdRegu,
@@ -878,7 +878,7 @@ async function getInjectByNoProduksi({ includeDisabled = true } = {}) {
       COALESCE(h.Shift, pendingProd.Shift) AS Shift,
       CONVERT(varchar(8), COALESCE(h.HourStart, pendingProd.HourStart), 108) AS HourStart,
       CONVERT(varchar(8), COALESCE(h.HourEnd, pendingProd.HourEnd), 108) AS HourEnd,
-      m.Target,
+      mi.Target,
       CONVERT(varchar(10), c.CurrentDate, 23) AS CurrentDate,
       CONVERT(varchar(8), c.CurrentTime, 108) AS CurrentTime,
       s.NoShift AS ActiveShift,
@@ -898,8 +898,6 @@ async function getInjectByNoProduksi({ includeDisabled = true } = {}) {
         ELSE 'aktif'
       END AS MachineStatus
     FROM dbo.MstMesinInject mi WITH (NOLOCK)
-    LEFT JOIN dbo.MstMesin m WITH (NOLOCK)
-      ON m.IdMesin = mi.IdMesin
     OUTER APPLY (
       SELECT TOP 1
         ih.NoProduksi,

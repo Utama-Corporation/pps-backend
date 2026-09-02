@@ -12,6 +12,10 @@ async function getRequest(runner) {
   return pool.request();
 }
 
+// Tabel master mesin yang boleh dipakai untuk lookup Blok/IdLokasi.
+// Di-whitelist karena nama tabel di-interpolasi langsung ke query.
+const ALLOWED_MESIN_TABLES = new Set(["MstMesin", "MstMesinInject"]);
+
 // Cari config berdasarkan prefix kode (pilih prefix terpanjang yang cocok)
 function resolveProduksiSourceByPrefix(kode) {
   if (!kode) return null;
@@ -69,16 +73,19 @@ async function getIdMesinFromKodeProduksi({ kode, runner } = {}) {
  * @param {Object} p
  * @param {number} p.idMesin
  * @param {sql.Transaction|sql.Request|sql.ConnectionPool|Promise} [p.runner]
+ * @param {string} [p.mesinTable] - tabel master mesin ("MstMesin" default, "MstMesinInject" utk inject)
  * @returns {Promise<{Blok: string|null, IdLokasi: number|null}|null>}
  */
-async function getBlokLokasiFromMesin({ idMesin, runner } = {}) {
+async function getBlokLokasiFromMesin({ idMesin, runner, mesinTable } = {}) {
   if (!idMesin) return null;
+
+  const table = ALLOWED_MESIN_TABLES.has(mesinTable) ? mesinTable : "MstMesin";
 
   const request = await getRequest(runner);
 
   const query = `
     SELECT TOP 1 Blok, IdLokasi
-    FROM dbo.MstMesin WITH (NOLOCK)
+    FROM dbo.${table} WITH (NOLOCK)
     WHERE IdMesin = @IdMesin
   `;
 
@@ -120,7 +127,11 @@ async function getBlokLokasiFromKodeProduksi({ kode, runner } = {}) {
   const idMesin = await getIdMesinFromKodeProduksi({ kode, runner });
   if (!idMesin) return null;
 
-  return getBlokLokasiFromMesin({ idMesin, runner });
+  return getBlokLokasiFromMesin({
+    idMesin,
+    runner,
+    mesinTable: source.mesinTable,
+  });
 }
 
 module.exports = {

@@ -375,7 +375,7 @@ async function getAllProduksi(
       h.CreatedAt
 
     FROM dbo.InjectProduksi_h h WITH (NOLOCK)
-    LEFT JOIN dbo.MstMesin    ms WITH (NOLOCK) ON ms.IdMesin    = h.IdMesin
+    LEFT JOIN dbo.MstMesinInject ms WITH (NOLOCK) ON ms.IdMesin = h.IdMesin
     LEFT JOIN dbo.MstRegu     rg WITH (NOLOCK) ON rg.IdRegu     = h.IdRegu
     LEFT JOIN dbo.MstCetakan  ct WITH (NOLOCK) ON ct.IdCetakan  = h.IdCetakan
     LEFT JOIN dbo.MstWarna    wr WITH (NOLOCK) ON wr.IdWarna    = h.IdWarna
@@ -632,7 +632,7 @@ async function getProduksiByDate(date) {
       jenisAgg.IdJenis AS IdJenis,
       jenisAgg.NamaJenis AS NamaJenis
     FROM dbo.InjectProduksi_h h WITH (NOLOCK)
-    LEFT JOIN dbo.MstMesin m WITH (NOLOCK) ON h.IdMesin = m.IdMesin
+    LEFT JOIN dbo.MstMesinInject m WITH (NOLOCK) ON h.IdMesin = m.IdMesin
     LEFT JOIN dbo.MstRegu rg WITH (NOLOCK) ON h.IdRegu = rg.IdRegu
     LEFT JOIN dbo.MstWarna wr WITH (NOLOCK) ON h.IdWarna = wr.IdWarna
     LEFT JOIN dbo.MstCabinetMaterial mm WITH (NOLOCK)
@@ -4086,6 +4086,14 @@ async function deleteInjectProduksi(noProduksi, ctx) {
     rq.input("NoProduksi", sql.VarChar(50), noProduksi);
 
     await assertNoReferencedInjectInputs(tx, noProduksi);
+
+    // Child rows yang SELALU dibuat bareng header (bukan input/output, jadi
+    // tidak ditangkap assertNoReferencedInjectInputs) harus dihapus dulu
+    // supaya DELETE header tidak kena FK constraint.
+    await rq.query(`
+      DELETE FROM dbo.InjectProduksiOperator_d
+      WHERE NoProduksi = @NoProduksi;
+    `);
 
     const res = await rq.query(`
       DELETE FROM dbo.InjectProduksi_h

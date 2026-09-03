@@ -747,6 +747,14 @@ exports.deleteGilinganCascade = async (payload) => {
     try {
       await tx.rollback();
     } catch (_) {}
+    // mapping FK error jika ada constraint lain di DB -> pesan ramah user
+    if (e.number === 547) {
+      e.statusCode = 409;
+      const raw = String(e.message || "");
+      e.message = /stockopp?name/i.test(raw)
+        ? "Label gilingan ini sudah tercatat pada Stock Opname, jadi tidak bisa dihapus."
+        : "Label gilingan ini masih terhubung dengan data lain, jadi tidak bisa dihapus.";
+    }
     throw e;
   }
 };

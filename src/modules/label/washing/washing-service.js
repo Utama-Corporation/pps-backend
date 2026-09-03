@@ -946,7 +946,7 @@ exports.deleteWashingCascade = async (payload) => {
 
     if (used.recordset.length > 0) {
       throw conflict(
-        "Tidak bisa hapus: terdapat detail yang sudah terpakai (DateUsage IS NOT NULL).",
+        "Label washing ini sudah digunakan pada proses produksi, jadi tidak bisa dihapus.",
       );
     }
 
@@ -995,10 +995,17 @@ exports.deleteWashingCascade = async (payload) => {
       await tx.rollback();
     } catch (_) {}
 
-    // mapping FK error jika ada constraint lain di DB
+    // mapping FK error jika ada constraint lain di DB -> pesan ramah user
     if (e.number === 547) {
       e.statusCode = 409;
-      e.message = e.message || "Gagal hapus karena constraint referensi (FK).";
+      const raw = String(e.message || "");
+      if (/stockopp?name/i.test(raw)) {
+        e.message =
+          "Label washing ini sudah tercatat pada Stock Opname, jadi tidak bisa dihapus.";
+      } else {
+        e.message =
+          "Label washing ini masih terhubung dengan data lain, jadi tidak bisa dihapus.";
+      }
     }
     throw e;
   }

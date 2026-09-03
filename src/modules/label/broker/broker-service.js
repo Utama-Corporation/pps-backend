@@ -1299,10 +1299,17 @@ exports.deleteBrokerCascade = async (payload) => {
       await tx.rollback();
     } catch (_) {}
 
-    // mapping FK error jika ada constraint lain di DB
+    // mapping FK error jika ada constraint lain di DB -> pesan ramah user
     if (e.number === 547) {
       e.statusCode = 409;
-      e.message = e.message || "Gagal hapus karena constraint referensi (FK).";
+      const raw = String(e.message || "");
+      if (/stockopp?name/i.test(raw)) {
+        e.message =
+          "Label broker ini sudah tercatat pada Stock Opname, jadi tidak bisa dihapus.";
+      } else {
+        e.message =
+          "Label broker ini masih terhubung dengan data lain, jadi tidak bisa dihapus.";
+      }
     }
     throw e;
   }

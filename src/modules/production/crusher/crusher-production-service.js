@@ -1089,7 +1089,7 @@ async function fetchInputs(noCrusherProduksi) {
 
     UNION ALL
 
-    /* Bonggolan (no partial, no jenis plastik) */
+    /* Bonggolan (no partial) — jenis dari MstBonggolan */
     SELECT
       'bonggolan' AS Src,
       ib.NoCrusherProduksi,
@@ -1100,10 +1100,12 @@ async function fetchInputs(noCrusherProduksi) {
       CAST(NULL AS decimal(18,3)) AS BeratAct,
       CAST(NULL AS bit) AS IsPartial,
       b.IdBonggolan AS IdJenis,
-      CAST('Bonggolan' AS varchar(100)) AS NamaJenis
+      CAST(COALESCE(mb.NamaBonggolan, 'Bonggolan') AS varchar(100)) AS NamaJenis
     FROM dbo.CrusherProduksiInputBonggolan ib WITH (NOLOCK)
-    LEFT JOIN dbo.Bonggolan b WITH (NOLOCK) 
+    LEFT JOIN dbo.Bonggolan b WITH (NOLOCK)
       ON b.NoBonggolan = ib.NoBonggolan
+    LEFT JOIN dbo.MstBonggolan mb WITH (NOLOCK)
+      ON mb.IdBonggolan = b.IdBonggolan
     WHERE ib.NoCrusherProduksi = @no
     ORDER BY Ref1 DESC, Ref2 ASC;
 

@@ -753,7 +753,14 @@ exports.deleteMixerCascade = async (payload) => {
 
     if (e.number === 547) {
       e.statusCode = 409;
-      e.message = e.message || "Delete failed due to foreign key constraint.";
+      const raw = String(e.message || "");
+      if (/stockopp?name/i.test(raw)) {
+        e.message =
+          "Label mixer ini sudah tercatat pada Stock Opname, jadi tidak bisa dihapus.";
+      } else {
+        e.message =
+          "Label mixer ini masih terhubung dengan data lain, jadi tidak bisa dihapus.";
+      }
     }
 
     throw e;

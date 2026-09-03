@@ -525,9 +525,11 @@ exports.deleteFurnitureWip = async (noFurnitureWip, payload) => {
     } catch (_) {}
 
     if (err?.number === 547) {
-      const e = conflict(
-        err.message || "Delete failed due to foreign key constraint.",
-      );
+      const raw = String(err.message || "");
+      const friendly = /stockopp?name/i.test(raw)
+        ? "Label furniture WIP ini sudah tercatat pada Stock Opname, jadi tidak bisa dihapus."
+        : "Label furniture WIP ini masih terhubung dengan data lain, jadi tidak bisa dihapus.";
+      const e = conflict(friendly);
       e.original = err;
       throw e;
     }

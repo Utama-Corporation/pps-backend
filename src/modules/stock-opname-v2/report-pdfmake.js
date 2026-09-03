@@ -120,7 +120,7 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
     style: "summaryTbl",
   });
 
-  // === LABEL BELUM DITEMUKAN ===
+  // === LABEL BELUM DITEMUKAN (dikelompokkan per jenis) ===
   if (unscannedData.length > 0) {
     content.push({ text: "Label Belum Ditemukan", style: "h2" });
     content.push({
@@ -128,29 +128,40 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
       style: "callout",
     });
 
+    // Kelompokkan per typeId (idjenis sama digabung), sort by nama
+    const grouped = new Map();
+    for (const r of unscannedData) {
+      const key = r.typeId ?? r.typeName ?? "-";
+      if (!grouped.has(key)) grouped.set(key, { typeName: r.typeName || "-", count: 0, metric: 0 });
+      const g = grouped.get(key);
+      g.count += 1;
+      g.metric += isFWIP ? (r.pcs ?? 0) : (r.weight ?? 0);
+    }
+
+    const sorted = [...grouped.entries()].sort((a, b) => a[1].typeName.localeCompare(b[1].typeName));
+
+    let no = 0;
     const hdr = [
-      { text: "No. Label / Tgl", style: "hdrCell" },
-      { text: "Jenis", style: "hdrCell" },
-      { text: "Lokasi", style: "hdrCellC" },
+      { text: "No", style: "hdrCell" },
+      { text: "Keterangan", style: "hdrCell" },
+      { text: "Jmlh Label", style: "hdrCellR" },
       { text: unitH, style: "hdrCellR" },
     ];
 
-    const truncated = unscannedTotalRecords > unscannedData.length;
-    const rows = unscannedData;
-
-    const bodyRows = rows.map((r) => {
-      const met = isFWIP ? (r.pcs ?? 0) : (r.weight ?? 0);
-      return [
-        labelCell(r),
-        { text: r.typeName || "-", style: "cell" },
-        { text: locLabel(r.blok, r.locationId), style: "cellC" },
-        { text: fmtNum(met, dig), style: "cellR" },
-      ];
-    });
+    const bodyRows = [];
+    for (const [, g] of sorted) {
+      no += 1;
+      bodyRows.push([
+        { text: fmtNum(no, 0), style: "cellC" },
+        { text: g.typeName, style: "cell" },
+        { text: fmtNum(g.count, 0), style: "cellR" },
+        { text: fmtNum(g.metric, dig), style: "cellR" },
+      ]);
+    }
 
     bodyRows.push([
-      { text: `TOTAL (${fmtNum(unscannedTotalRecords)} label)`, style: "cell" },
       { text: "", style: "cell" },
+      { text: `TOTAL (${fmtNum(unscannedTotalRecords)} label)`, style: "cell" },
       { text: "", style: "cell" },
       { text: fmtNum(unscanned, dig), style: "cellR" },
     ]);
@@ -164,13 +175,6 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
       layout: tblLayout(true),
       style: "summaryTbl",
     });
-
-    if (truncated) {
-      content.push({
-        text: `Menampilkan ${fmtNum(unscannedData.length)} dari ${fmtNum(unscannedTotalRecords)} label belum ditemukan.`,
-        style: "note",
-      });
-    }
   } else {
     content.push({ text: "Label Belum Ditemukan", style: "h2" });
     content.push({ text: "Seluruh label ditemukan saat opname.", style: "callout" });

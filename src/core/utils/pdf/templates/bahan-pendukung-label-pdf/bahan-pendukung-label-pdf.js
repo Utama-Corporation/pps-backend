@@ -8,7 +8,6 @@ function buildBahanPendukungLabelHtml(data) {
   return templateHtml
     .replace(/{{noLabel}}/g, data.noLabel || "-")
     .replace("{{namaProduk}}", data.namaProduk || "-")
-    .replace("{{kode}}", data.kode || "-")
     .replace("{{tanggal}}", data.tanggal || "-")
     .replace("{{createBy}}", data.createBy || "-")
     .replace("{{qrBase64}}", data.qrBase64 || "")

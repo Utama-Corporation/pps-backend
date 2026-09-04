@@ -92,11 +92,11 @@ async function getBrokerByNoProduksi({
       m.IdMesin,
       m.NamaMesin,
       m.Bagian,
-      h.NoProduksi,
-      CONVERT(date, h.TglProduksi) AS TglProduksi,
-      h.IdRegu,
+      COALESCE(h.NoProduksi, pendingProd.NoProduksi) AS NoProduksi,
+      CONVERT(date, COALESCE(h.TglProduksi, pendingProd.TglProduksi)) AS TglProduksi,
+      COALESCE(h.IdRegu, pendingProd.IdRegu) AS IdRegu,
       rg.NamaRegu,
-      h.OutputJenisId,
+      COALESCE(h.OutputJenisId, pendingProd.OutputJenisId) AS OutputJenisId,
       br.Nama AS OutputJenisNama,
       br.ItemCode AS OutputJenisItemCode,
       JSON_QUERY(
@@ -104,7 +104,7 @@ async function getBrokerByNoProduksi({
           (
             SELECT od.IdOperator AS [value]
             FROM dbo.BrokerProduksiOperator_d od WITH (NOLOCK)
-            WHERE od.NoProduksi = h.NoProduksi
+            WHERE od.NoProduksi = COALESCE(h.NoProduksi, pendingProd.NoProduksi)
             ORDER BY od.IdOperator
             FOR JSON PATH
           ),
@@ -117,20 +117,25 @@ async function getBrokerByNoProduksi({
           FROM dbo.BrokerProduksiOperator_d od WITH (NOLOCK)
           INNER JOIN dbo.MstOperator op WITH (NOLOCK)
             ON op.IdOperator = od.IdOperator
-          WHERE od.NoProduksi = h.NoProduksi
+          WHERE od.NoProduksi = COALESCE(h.NoProduksi, pendingProd.NoProduksi)
         ),
         ''
       ) AS Operators,
-      h.Shift,
-      CONVERT(varchar(8), h.HourStart, 108) AS HourStart,
-      CONVERT(varchar(8), h.HourEnd, 108) AS HourEnd,
+      COALESCE(h.Shift, pendingProd.Shift) AS Shift,
+      CONVERT(varchar(8), COALESCE(h.HourStart, pendingProd.HourStart), 108) AS HourStart,
+      CONVERT(varchar(8), COALESCE(h.HourEnd, pendingProd.HourEnd), 108) AS HourEnd,
       m.Target,
       CONVERT(varchar(10), c.CurrentDate, 23) AS CurrentDate,
       CONVERT(varchar(8), c.CurrentTime, 108) AS CurrentTime,
       s.NoShift AS ActiveShift,
       CONVERT(varchar(8), s.HourStart, 108) AS ActiveShiftHourStart,
       CONVERT(varchar(8), s.HourEnd, 108) AS ActiveShiftHourEnd,
-      s.ValidFrmDate AS ActiveShiftValidFrmDate
+      s.ValidFrmDate AS ActiveShiftValidFrmDate,
+      CASE
+        WHEN pendingProd.NoProduksi IS NOT NULL THEN 'pending'
+        WHEN h.NoProduksi IS NULL THEN 'idle'
+        ELSE 'aktif'
+      END AS MachineStatus
     FROM dbo.MstMesin m WITH (NOLOCK)
     OUTER APPLY (
       SELECT TOP 1
@@ -163,10 +168,36 @@ async function getBrokerByNoProduksi({
         )
       ORDER BY bh.HourStart DESC, bh.NoProduksi DESC
     ) h
+    OUTER APPLY (
+      -- Produksi incomplete terbaru yang windownya sudah lewat -> mesin "pending"
+      SELECT TOP 1
+        p.NoProduksi,
+        p.TglProduksi,
+        p.IdRegu,
+        p.OutputJenisId,
+        p.Shift,
+        p.HourStart,
+        p.HourEnd
+      FROM dbo.BrokerProduksi_h p WITH (NOLOCK)
+      CROSS JOIN CurrentCtx c
+      WHERE p.IdMesin = m.IdMesin
+        AND ISNULL(p.IsComplete, 0) = 0
+        AND (
+          CONVERT(date, p.TglProduksi) < c.CurrentDate
+          OR (
+            CONVERT(date, p.TglProduksi) = c.CurrentDate
+            AND (
+              (p.HourStart <= p.HourEnd AND c.CurrentTime >= CAST(p.HourEnd AS time(0)))
+              OR (p.HourStart > p.HourEnd AND c.CurrentTime >= CAST(p.HourEnd AS time(0)) AND c.CurrentTime < CAST(p.HourStart AS time(0)))
+            )
+          )
+        )
+      ORDER BY p.TglProduksi DESC, p.HourEnd DESC, p.NoProduksi DESC
+    ) pendingProd
     LEFT JOIN dbo.MstBroker br WITH (NOLOCK)
-      ON br.IdBroker = h.OutputJenisId
+      ON br.IdBroker = COALESCE(h.OutputJenisId, pendingProd.OutputJenisId)
     LEFT JOIN dbo.MstRegu rg WITH (NOLOCK)
-      ON rg.IdRegu = h.IdRegu
+      ON rg.IdRegu = COALESCE(h.IdRegu, pendingProd.IdRegu)
     OUTER APPLY (SELECT TOP 1 * FROM ActiveShift) s
     CROSS JOIN CurrentCtx c
     WHERE ${whereEnable}
@@ -233,18 +264,18 @@ async function getWashingByNoProduksi({
       m.IdMesin,
       m.NamaMesin,
       m.Bagian,
-      h.NoProduksi,
-      CONVERT(date, h.TglProduksi) AS TglProduksi,
-      h.IdRegu,
+      COALESCE(h.NoProduksi, pendingProd.NoProduksi) AS NoProduksi,
+      CONVERT(date, COALESCE(h.TglProduksi, pendingProd.TglProduksi)) AS TglProduksi,
+      COALESCE(h.IdRegu, pendingProd.IdRegu) AS IdRegu,
       rg.NamaRegu,
-      h.OutputJenisId,
+      COALESCE(h.OutputJenisId, pendingProd.OutputJenisId) AS OutputJenisId,
       mw.Nama AS OutputJenisNama,
       mw.ItemCode AS OutputJenisItemCode,
       h.IdOperator,
       op.NamaOperator,
-      h.Shift,
-      CONVERT(varchar(8), h.HourStart, 108) AS HourStart,
-      CONVERT(varchar(8), h.HourEnd, 108) AS HourEnd,
+      COALESCE(h.Shift, pendingProd.Shift) AS Shift,
+      CONVERT(varchar(8), COALESCE(h.HourStart, pendingProd.HourStart), 108) AS HourStart,
+      CONVERT(varchar(8), COALESCE(h.HourEnd, pendingProd.HourEnd), 108) AS HourEnd,
       h.IsBlower,
       m.Target,
       CONVERT(varchar(10), c.CurrentDate, 23) AS CurrentDate,
@@ -252,7 +283,12 @@ async function getWashingByNoProduksi({
       s.NoShift AS ActiveShift,
       CONVERT(varchar(8), s.HourStart, 108) AS ActiveShiftHourStart,
       CONVERT(varchar(8), s.HourEnd, 108) AS ActiveShiftHourEnd,
-      s.ValidFrmDate AS ActiveShiftValidFrmDate
+      s.ValidFrmDate AS ActiveShiftValidFrmDate,
+      CASE
+        WHEN pendingProd.NoProduksi IS NOT NULL THEN 'pending'
+        WHEN h.NoProduksi IS NULL THEN 'idle'
+        ELSE 'aktif'
+      END AS MachineStatus
     FROM dbo.MstMesin m WITH (NOLOCK)
     OUTER APPLY (
       SELECT TOP 1
@@ -287,12 +323,38 @@ async function getWashingByNoProduksi({
         )
       ORDER BY wh.HourStart DESC, wh.NoProduksi DESC
     ) h
+    OUTER APPLY (
+      -- Produksi incomplete terbaru yang windownya sudah lewat -> mesin "pending"
+      SELECT TOP 1
+        p.NoProduksi,
+        p.TglProduksi,
+        p.IdRegu,
+        p.OutputJenisId,
+        p.Shift,
+        p.HourStart,
+        p.HourEnd
+      FROM dbo.WashingProduksi_h p WITH (NOLOCK)
+      CROSS JOIN CurrentCtx c
+      WHERE p.IdMesin = m.IdMesin
+        AND ISNULL(p.IsComplete, 0) = 0
+        AND (
+          CONVERT(date, p.TglProduksi) < c.CurrentDate
+          OR (
+            CONVERT(date, p.TglProduksi) = c.CurrentDate
+            AND (
+              (p.HourStart <= p.HourEnd AND c.CurrentTime >= CAST(p.HourEnd AS time(0)))
+              OR (p.HourStart > p.HourEnd AND c.CurrentTime >= CAST(p.HourEnd AS time(0)) AND c.CurrentTime < CAST(p.HourStart AS time(0)))
+            )
+          )
+        )
+      ORDER BY p.TglProduksi DESC, p.HourEnd DESC, p.NoProduksi DESC
+    ) pendingProd
     LEFT JOIN dbo.MstOperator op WITH (NOLOCK)
       ON op.IdOperator = h.IdOperator
     LEFT JOIN dbo.MstWashing mw WITH (NOLOCK)
-      ON mw.IdWashing = h.OutputJenisId
+      ON mw.IdWashing = COALESCE(h.OutputJenisId, pendingProd.OutputJenisId)
     LEFT JOIN dbo.MstRegu rg WITH (NOLOCK)
-      ON rg.IdRegu = h.IdRegu
+      ON rg.IdRegu = COALESCE(h.IdRegu, pendingProd.IdRegu)
     OUTER APPLY (SELECT TOP 1 * FROM ActiveShift) s
     CROSS JOIN CurrentCtx c
     WHERE ${whereEnable}
@@ -359,11 +421,11 @@ async function getCrusherByNoProduksi({
       m.IdMesin,
       m.NamaMesin,
       m.Bagian,
-      h.NoCrusherProduksi AS NoProduksi,
-      CONVERT(date, h.Tanggal) AS TglProduksi,
-      h.IdRegu,
+      COALESCE(h.NoCrusherProduksi, pendingProd.NoCrusherProduksi) AS NoProduksi,
+      CONVERT(date, COALESCE(h.Tanggal, pendingProd.Tanggal)) AS TglProduksi,
+      COALESCE(h.IdRegu, pendingProd.IdRegu) AS IdRegu,
       rg.NamaRegu,
-      h.OutputJenisId,
+      COALESCE(h.OutputJenisId, pendingProd.OutputJenisId) AS OutputJenisId,
       mc.NamaCrusher AS OutputJenisNama,
       mc.ItemCode AS OutputJenisItemCode,
       JSON_QUERY(
@@ -371,7 +433,7 @@ async function getCrusherByNoProduksi({
           (
             SELECT od.IdOperator AS [value]
             FROM dbo.CrusherProduksiOperator_d od WITH (NOLOCK)
-            WHERE od.NoCrusherProduksi = h.NoCrusherProduksi
+            WHERE od.NoCrusherProduksi = COALESCE(h.NoCrusherProduksi, pendingProd.NoCrusherProduksi)
             ORDER BY od.IdOperator
             FOR JSON PATH
           ),
@@ -384,20 +446,25 @@ async function getCrusherByNoProduksi({
           FROM dbo.CrusherProduksiOperator_d od WITH (NOLOCK)
           INNER JOIN dbo.MstOperator op WITH (NOLOCK)
             ON op.IdOperator = od.IdOperator
-          WHERE od.NoCrusherProduksi = h.NoCrusherProduksi
+          WHERE od.NoCrusherProduksi = COALESCE(h.NoCrusherProduksi, pendingProd.NoCrusherProduksi)
         ),
         ''
       ) AS Operators,
-      h.Shift,
-      CONVERT(varchar(8), h.HourStart, 108) AS HourStart,
-      CONVERT(varchar(8), h.HourEnd, 108) AS HourEnd,
+      COALESCE(h.Shift, pendingProd.Shift) AS Shift,
+      CONVERT(varchar(8), COALESCE(h.HourStart, pendingProd.HourStart), 108) AS HourStart,
+      CONVERT(varchar(8), COALESCE(h.HourEnd, pendingProd.HourEnd), 108) AS HourEnd,
       m.Target,
       CONVERT(varchar(10), c.CurrentDate, 23) AS CurrentDate,
       CONVERT(varchar(8), c.CurrentTime, 108) AS CurrentTime,
       s.NoShift AS ActiveShift,
       CONVERT(varchar(8), s.HourStart, 108) AS ActiveShiftHourStart,
       CONVERT(varchar(8), s.HourEnd, 108) AS ActiveShiftHourEnd,
-      s.ValidFrmDate AS ActiveShiftValidFrmDate
+      s.ValidFrmDate AS ActiveShiftValidFrmDate,
+      CASE
+        WHEN pendingProd.NoCrusherProduksi IS NOT NULL THEN 'pending'
+        WHEN h.NoCrusherProduksi IS NULL THEN 'idle'
+        ELSE 'aktif'
+      END AS MachineStatus
     FROM dbo.MstMesin m WITH (NOLOCK)
     OUTER APPLY (
       SELECT TOP 1
@@ -430,10 +497,36 @@ async function getCrusherByNoProduksi({
         )
       ORDER BY ch.HourStart DESC, ch.NoCrusherProduksi DESC
     ) h
+    OUTER APPLY (
+      -- Produksi incomplete terbaru yang windownya sudah lewat -> mesin "pending"
+      SELECT TOP 1
+        cp.NoCrusherProduksi,
+        cp.Tanggal,
+        cp.IdRegu,
+        cp.OutputJenisId,
+        cp.Shift,
+        cp.HourStart,
+        cp.HourEnd
+      FROM dbo.CrusherProduksi_h cp WITH (NOLOCK)
+      CROSS JOIN CurrentCtx c
+      WHERE cp.IdMesin = m.IdMesin
+        AND ISNULL(cp.IsComplete, 0) = 0
+        AND (
+          CONVERT(date, cp.Tanggal) < c.CurrentDate
+          OR (
+            CONVERT(date, cp.Tanggal) = c.CurrentDate
+            AND (
+              (cp.HourStart <= cp.HourEnd AND c.CurrentTime >= CAST(cp.HourEnd AS time(0)))
+              OR (cp.HourStart > cp.HourEnd AND c.CurrentTime >= CAST(cp.HourEnd AS time(0)) AND c.CurrentTime < CAST(cp.HourStart AS time(0)))
+            )
+          )
+        )
+      ORDER BY cp.Tanggal DESC, cp.HourEnd DESC, cp.NoCrusherProduksi DESC
+    ) pendingProd
     LEFT JOIN dbo.MstCrusher mc WITH (NOLOCK)
-      ON mc.IdCrusher = h.OutputJenisId
+      ON mc.IdCrusher = COALESCE(h.OutputJenisId, pendingProd.OutputJenisId)
     LEFT JOIN dbo.MstRegu rg WITH (NOLOCK)
-      ON rg.IdRegu = h.IdRegu
+      ON rg.IdRegu = COALESCE(h.IdRegu, pendingProd.IdRegu)
     OUTER APPLY (SELECT TOP 1 * FROM ActiveShift) s
     CROSS JOIN CurrentCtx c
     WHERE ${whereEnable}
@@ -690,11 +783,11 @@ async function getMixerByNoProduksi({
       m.NamaMesin,
       m.Bagian,
       m.IdBagianMesin,
-      h.NoProduksi,
-      CONVERT(date, h.TglProduksi) AS TglProduksi,
-      h.IdRegu,
+      COALESCE(h.NoProduksi, pendingProd.NoProduksi) AS NoProduksi,
+      CONVERT(date, COALESCE(h.TglProduksi, pendingProd.TglProduksi)) AS TglProduksi,
+      COALESCE(h.IdRegu, pendingProd.IdRegu) AS IdRegu,
       rg.NamaRegu,
-      h.OutputJenisId,
+      COALESCE(h.OutputJenisId, pendingProd.OutputJenisId) AS OutputJenisId,
       mm.Jenis  AS OutputJenisNama,
       mm.ItemCode AS OutputJenisItemCode,
       JSON_QUERY(
@@ -702,7 +795,7 @@ async function getMixerByNoProduksi({
           (
             SELECT od.IdOperator AS [value]
             FROM dbo.MixerProduksiOperator_d od WITH (NOLOCK)
-            WHERE od.NoProduksi = h.NoProduksi
+            WHERE od.NoProduksi = COALESCE(h.NoProduksi, pendingProd.NoProduksi)
             ORDER BY od.IdOperator
             FOR JSON PATH
           ),
@@ -715,20 +808,25 @@ async function getMixerByNoProduksi({
           FROM dbo.MixerProduksiOperator_d od WITH (NOLOCK)
           INNER JOIN dbo.MstOperator op WITH (NOLOCK)
             ON op.IdOperator = od.IdOperator
-          WHERE od.NoProduksi = h.NoProduksi
+          WHERE od.NoProduksi = COALESCE(h.NoProduksi, pendingProd.NoProduksi)
         ),
         ''
       ) AS Operators,
-      h.Shift,
-      CONVERT(varchar(8), h.HourStart, 108) AS HourStart,
-      CONVERT(varchar(8), h.HourEnd, 108)   AS HourEnd,
+      COALESCE(h.Shift, pendingProd.Shift) AS Shift,
+      CONVERT(varchar(8), COALESCE(h.HourStart, pendingProd.HourStart), 108) AS HourStart,
+      CONVERT(varchar(8), COALESCE(h.HourEnd, pendingProd.HourEnd), 108) AS HourEnd,
       m.Target,
       CONVERT(varchar(10), c.CurrentDate, 23) AS CurrentDate,
       CONVERT(varchar(8), c.CurrentTime, 108) AS CurrentTime,
       s.NoShift AS ActiveShift,
       CONVERT(varchar(8), s.HourStart, 108) AS ActiveShiftHourStart,
       CONVERT(varchar(8), s.HourEnd, 108)   AS ActiveShiftHourEnd,
-      s.ValidFrmDate AS ActiveShiftValidFrmDate
+      s.ValidFrmDate AS ActiveShiftValidFrmDate,
+      CASE
+        WHEN pendingProd.NoProduksi IS NOT NULL THEN 'pending'
+        WHEN h.NoProduksi IS NULL THEN 'idle'
+        ELSE 'aktif'
+      END AS MachineStatus
     FROM dbo.MstMesin m WITH (NOLOCK)
     OUTER APPLY (
       SELECT TOP 1
@@ -761,10 +859,36 @@ async function getMixerByNoProduksi({
         )
       ORDER BY mh.HourStart DESC, mh.NoProduksi DESC
     ) h
+    OUTER APPLY (
+      -- Produksi incomplete terbaru yang windownya sudah lewat -> mesin "pending"
+      SELECT TOP 1
+        p.NoProduksi,
+        p.TglProduksi,
+        p.IdRegu,
+        p.OutputJenisId,
+        p.Shift,
+        p.HourStart,
+        p.HourEnd
+      FROM dbo.MixerProduksi_h p WITH (NOLOCK)
+      CROSS JOIN CurrentCtx c
+      WHERE p.IdMesin = m.IdMesin
+        AND ISNULL(p.IsComplete, 0) = 0
+        AND (
+          CONVERT(date, p.TglProduksi) < c.CurrentDate
+          OR (
+            CONVERT(date, p.TglProduksi) = c.CurrentDate
+            AND (
+              (p.HourStart <= p.HourEnd AND c.CurrentTime >= CAST(p.HourEnd AS time(0)))
+              OR (p.HourStart > p.HourEnd AND c.CurrentTime >= CAST(p.HourEnd AS time(0)) AND c.CurrentTime < CAST(p.HourStart AS time(0)))
+            )
+          )
+        )
+      ORDER BY p.TglProduksi DESC, p.HourEnd DESC, p.NoProduksi DESC
+    ) pendingProd
     LEFT JOIN dbo.MstMixer mm WITH (NOLOCK)
-      ON mm.IdMixer = h.OutputJenisId
+      ON mm.IdMixer = COALESCE(h.OutputJenisId, pendingProd.OutputJenisId)
     LEFT JOIN dbo.MstRegu rg WITH (NOLOCK)
-      ON rg.IdRegu = h.IdRegu
+      ON rg.IdRegu = COALESCE(h.IdRegu, pendingProd.IdRegu)
     OUTER APPLY (SELECT TOP 1 * FROM ActiveShift) s
     CROSS JOIN CurrentCtx c
     WHERE ${whereEnable}
@@ -1163,11 +1287,11 @@ async function getStampingByNoProduksi({
       m.NamaMesin,
       m.Bagian,
       m.IdBagianMesin,
-      h.NoProduksi,
-      CONVERT(date, h.Tanggal) AS TglProduksi,
-      h.IdRegu,
+      COALESCE(h.NoProduksi, pendingProd.NoProduksi) AS NoProduksi,
+      CONVERT(date, COALESCE(h.Tanggal, pendingProd.Tanggal)) AS TglProduksi,
+      COALESCE(h.IdRegu, pendingProd.IdRegu) AS IdRegu,
       rg.NamaRegu,
-      h.OutputJenisId,
+      COALESCE(h.OutputJenisId, pendingProd.OutputJenisId) AS OutputJenisId,
       cw.Nama     AS OutputJenisNama,
       cw.ItemCode AS OutputJenisItemCode,
       JSON_QUERY(
@@ -1175,7 +1299,7 @@ async function getStampingByNoProduksi({
           (
             SELECT od.IdOperator AS [value]
             FROM dbo.HotStampingOperator_d od WITH (NOLOCK)
-            WHERE od.NoProduksi = h.NoProduksi
+            WHERE od.NoProduksi = COALESCE(h.NoProduksi, pendingProd.NoProduksi)
             ORDER BY od.IdOperator
             FOR JSON PATH
           ),
@@ -1188,20 +1312,25 @@ async function getStampingByNoProduksi({
           FROM dbo.HotStampingOperator_d od WITH (NOLOCK)
           INNER JOIN dbo.MstOperator op WITH (NOLOCK)
             ON op.IdOperator = od.IdOperator
-          WHERE od.NoProduksi = h.NoProduksi
+          WHERE od.NoProduksi = COALESCE(h.NoProduksi, pendingProd.NoProduksi)
         ),
         ''
       ) AS Operators,
-      h.Shift,
-      CONVERT(varchar(8), h.HourStart, 108) AS HourStart,
-      CONVERT(varchar(8), h.HourEnd,   108) AS HourEnd,
+      COALESCE(h.Shift, pendingProd.Shift) AS Shift,
+      CONVERT(varchar(8), COALESCE(h.HourStart, pendingProd.HourStart), 108) AS HourStart,
+      CONVERT(varchar(8), COALESCE(h.HourEnd, pendingProd.HourEnd),   108) AS HourEnd,
       m.Target,
       CONVERT(varchar(10), c.CurrentDate, 23) AS CurrentDate,
       CONVERT(varchar(8), c.CurrentTime, 108) AS CurrentTime,
       s.NoShift AS ActiveShift,
       CONVERT(varchar(8), s.HourStart, 108) AS ActiveShiftHourStart,
       CONVERT(varchar(8), s.HourEnd,   108) AS ActiveShiftHourEnd,
-      s.ValidFrmDate AS ActiveShiftValidFrmDate
+      s.ValidFrmDate AS ActiveShiftValidFrmDate,
+      CASE
+        WHEN pendingProd.NoProduksi IS NOT NULL THEN 'pending'
+        WHEN h.NoProduksi IS NULL THEN 'idle'
+        ELSE 'aktif'
+      END AS MachineStatus
     FROM dbo.MstMesin m WITH (NOLOCK)
     OUTER APPLY (
       SELECT TOP 1
@@ -1234,10 +1363,36 @@ async function getStampingByNoProduksi({
         )
       ORDER BY hs.HourStart DESC, hs.NoProduksi DESC
     ) h
+    OUTER APPLY (
+      -- Produksi incomplete terbaru yang windownya sudah lewat -> mesin "pending"
+      SELECT TOP 1
+        p.NoProduksi,
+        p.Tanggal,
+        p.IdRegu,
+        p.OutputJenisId,
+        p.Shift,
+        p.HourStart,
+        p.HourEnd
+      FROM dbo.HotStamping_h p WITH (NOLOCK)
+      CROSS JOIN CurrentCtx c
+      WHERE p.IdMesin = m.IdMesin
+        AND ISNULL(p.IsComplete, 0) = 0
+        AND (
+          CONVERT(date, p.Tanggal) < c.CurrentDate
+          OR (
+            CONVERT(date, p.Tanggal) = c.CurrentDate
+            AND (
+              (p.HourStart <= p.HourEnd AND c.CurrentTime >= CAST(p.HourEnd AS time(0)))
+              OR (p.HourStart > p.HourEnd AND c.CurrentTime >= CAST(p.HourEnd AS time(0)) AND c.CurrentTime < CAST(p.HourStart AS time(0)))
+            )
+          )
+        )
+      ORDER BY p.Tanggal DESC, p.HourEnd DESC, p.NoProduksi DESC
+    ) pendingProd
     LEFT JOIN dbo.MstCabinetWIP cw WITH (NOLOCK)
-      ON cw.IdCabinetWIP = h.OutputJenisId
+      ON cw.IdCabinetWIP = COALESCE(h.OutputJenisId, pendingProd.OutputJenisId)
     LEFT JOIN dbo.MstRegu rg WITH (NOLOCK)
-      ON rg.IdRegu = h.IdRegu
+      ON rg.IdRegu = COALESCE(h.IdRegu, pendingProd.IdRegu)
     OUTER APPLY (SELECT TOP 1 * FROM ActiveShift) s
     CROSS JOIN CurrentCtx c
     WHERE ${whereEnable}
@@ -1305,11 +1460,11 @@ async function getPasangKunciByNoProduksi({
       m.NamaMesin,
       m.Bagian,
       m.IdBagianMesin,
-      h.NoProduksi,
-      CONVERT(date, h.Tanggal) AS TglProduksi,
-      h.IdRegu,
+      COALESCE(h.NoProduksi, pendingProd.NoProduksi) AS NoProduksi,
+      CONVERT(date, COALESCE(h.Tanggal, pendingProd.Tanggal)) AS TglProduksi,
+      COALESCE(h.IdRegu, pendingProd.IdRegu) AS IdRegu,
       rg.NamaRegu,
-      h.OutputJenisId,
+      COALESCE(h.OutputJenisId, pendingProd.OutputJenisId) AS OutputJenisId,
       cw.Nama     AS OutputJenisNama,
       cw.ItemCode AS OutputJenisItemCode,
       JSON_QUERY(
@@ -1317,7 +1472,7 @@ async function getPasangKunciByNoProduksi({
           (
             SELECT od.IdOperator AS [value]
             FROM dbo.PasangKunciOperator_d od WITH (NOLOCK)
-            WHERE od.NoProduksi = h.NoProduksi
+            WHERE od.NoProduksi = COALESCE(h.NoProduksi, pendingProd.NoProduksi)
             ORDER BY od.IdOperator
             FOR JSON PATH
           ),
@@ -1330,20 +1485,25 @@ async function getPasangKunciByNoProduksi({
           FROM dbo.PasangKunciOperator_d od WITH (NOLOCK)
           INNER JOIN dbo.MstOperator op WITH (NOLOCK)
             ON op.IdOperator = od.IdOperator
-          WHERE od.NoProduksi = h.NoProduksi
+          WHERE od.NoProduksi = COALESCE(h.NoProduksi, pendingProd.NoProduksi)
         ),
         ''
       ) AS Operators,
-      h.Shift,
-      CONVERT(varchar(8), h.HourStart, 108) AS HourStart,
-      CONVERT(varchar(8), h.HourEnd,   108) AS HourEnd,
+      COALESCE(h.Shift, pendingProd.Shift) AS Shift,
+      CONVERT(varchar(8), COALESCE(h.HourStart, pendingProd.HourStart), 108) AS HourStart,
+      CONVERT(varchar(8), COALESCE(h.HourEnd, pendingProd.HourEnd),   108) AS HourEnd,
       m.Target,
       CONVERT(varchar(10), c.CurrentDate, 23) AS CurrentDate,
       CONVERT(varchar(8), c.CurrentTime, 108) AS CurrentTime,
       s.NoShift AS ActiveShift,
       CONVERT(varchar(8), s.HourStart, 108) AS ActiveShiftHourStart,
       CONVERT(varchar(8), s.HourEnd,   108) AS ActiveShiftHourEnd,
-      s.ValidFrmDate AS ActiveShiftValidFrmDate
+      s.ValidFrmDate AS ActiveShiftValidFrmDate,
+      CASE
+        WHEN pendingProd.NoProduksi IS NOT NULL THEN 'pending'
+        WHEN h.NoProduksi IS NULL THEN 'idle'
+        ELSE 'aktif'
+      END AS MachineStatus
     FROM dbo.MstMesin m WITH (NOLOCK)
     OUTER APPLY (
       SELECT TOP 1
@@ -1376,10 +1536,36 @@ async function getPasangKunciByNoProduksi({
         )
       ORDER BY pk.HourStart DESC, pk.NoProduksi DESC
     ) h
+    OUTER APPLY (
+      -- Produksi incomplete terbaru yang windownya sudah lewat -> mesin "pending"
+      SELECT TOP 1
+        p.NoProduksi,
+        p.Tanggal,
+        p.IdRegu,
+        p.OutputJenisId,
+        p.Shift,
+        p.HourStart,
+        p.HourEnd
+      FROM dbo.PasangKunci_h p WITH (NOLOCK)
+      CROSS JOIN CurrentCtx c
+      WHERE p.IdMesin = m.IdMesin
+        AND ISNULL(p.IsComplete, 0) = 0
+        AND (
+          CONVERT(date, p.Tanggal) < c.CurrentDate
+          OR (
+            CONVERT(date, p.Tanggal) = c.CurrentDate
+            AND (
+              (p.HourStart <= p.HourEnd AND c.CurrentTime >= CAST(p.HourEnd AS time(0)))
+              OR (p.HourStart > p.HourEnd AND c.CurrentTime >= CAST(p.HourEnd AS time(0)) AND c.CurrentTime < CAST(p.HourStart AS time(0)))
+            )
+          )
+        )
+      ORDER BY p.Tanggal DESC, p.HourEnd DESC, p.NoProduksi DESC
+    ) pendingProd
     LEFT JOIN dbo.MstCabinetWIP cw WITH (NOLOCK)
-      ON cw.IdCabinetWIP = h.OutputJenisId
+      ON cw.IdCabinetWIP = COALESCE(h.OutputJenisId, pendingProd.OutputJenisId)
     LEFT JOIN dbo.MstRegu rg WITH (NOLOCK)
-      ON rg.IdRegu = h.IdRegu
+      ON rg.IdRegu = COALESCE(h.IdRegu, pendingProd.IdRegu)
     OUTER APPLY (SELECT TOP 1 * FROM ActiveShift) s
     CROSS JOIN CurrentCtx c
     WHERE ${whereEnable}
@@ -1447,11 +1633,11 @@ async function getSpannerByNoProduksi({
       m.NamaMesin,
       m.Bagian,
       m.IdBagianMesin,
-      h.NoProduksi,
-      CONVERT(date, h.Tanggal) AS TglProduksi,
-      h.IdRegu,
+      COALESCE(h.NoProduksi, pendingProd.NoProduksi) AS NoProduksi,
+      CONVERT(date, COALESCE(h.Tanggal, pendingProd.Tanggal)) AS TglProduksi,
+      COALESCE(h.IdRegu, pendingProd.IdRegu) AS IdRegu,
       rg.NamaRegu,
-      h.OutputJenisId,
+      COALESCE(h.OutputJenisId, pendingProd.OutputJenisId) AS OutputJenisId,
       mbj.NamaBJ  AS OutputJenisNama,
       mbj.ItemCode AS OutputJenisItemCode,
       JSON_QUERY(
@@ -1459,7 +1645,7 @@ async function getSpannerByNoProduksi({
           (
             SELECT od.IdOperator AS [value]
             FROM dbo.SpannerOperator_d od WITH (NOLOCK)
-            WHERE od.NoProduksi = h.NoProduksi
+            WHERE od.NoProduksi = COALESCE(h.NoProduksi, pendingProd.NoProduksi)
             ORDER BY od.IdOperator
             FOR JSON PATH
           ),
@@ -1472,20 +1658,25 @@ async function getSpannerByNoProduksi({
           FROM dbo.SpannerOperator_d od WITH (NOLOCK)
           INNER JOIN dbo.MstOperator op WITH (NOLOCK)
             ON op.IdOperator = od.IdOperator
-          WHERE od.NoProduksi = h.NoProduksi
+          WHERE od.NoProduksi = COALESCE(h.NoProduksi, pendingProd.NoProduksi)
         ),
         ''
       ) AS Operators,
-      h.Shift,
-      CONVERT(varchar(8), h.HourStart, 108) AS HourStart,
-      CONVERT(varchar(8), h.HourEnd,   108) AS HourEnd,
+      COALESCE(h.Shift, pendingProd.Shift) AS Shift,
+      CONVERT(varchar(8), COALESCE(h.HourStart, pendingProd.HourStart), 108) AS HourStart,
+      CONVERT(varchar(8), COALESCE(h.HourEnd, pendingProd.HourEnd),   108) AS HourEnd,
       m.Target,
       CONVERT(varchar(10), c.CurrentDate, 23) AS CurrentDate,
       CONVERT(varchar(8), c.CurrentTime, 108) AS CurrentTime,
       s.NoShift AS ActiveShift,
       CONVERT(varchar(8), s.HourStart, 108) AS ActiveShiftHourStart,
       CONVERT(varchar(8), s.HourEnd,   108) AS ActiveShiftHourEnd,
-      s.ValidFrmDate AS ActiveShiftValidFrmDate
+      s.ValidFrmDate AS ActiveShiftValidFrmDate,
+      CASE
+        WHEN pendingProd.NoProduksi IS NOT NULL THEN 'pending'
+        WHEN h.NoProduksi IS NULL THEN 'idle'
+        ELSE 'aktif'
+      END AS MachineStatus
     FROM dbo.MstMesin m WITH (NOLOCK)
     OUTER APPLY (
       SELECT TOP 1
@@ -1518,10 +1709,36 @@ async function getSpannerByNoProduksi({
         )
       ORDER BY sp.HourStart DESC, sp.NoProduksi DESC
     ) h
+    OUTER APPLY (
+      -- Produksi incomplete terbaru yang windownya sudah lewat -> mesin "pending"
+      SELECT TOP 1
+        p.NoProduksi,
+        p.Tanggal,
+        p.IdRegu,
+        p.OutputJenisId,
+        p.Shift,
+        p.HourStart,
+        p.HourEnd
+      FROM dbo.Spanner_h p WITH (NOLOCK)
+      CROSS JOIN CurrentCtx c
+      WHERE p.IdMesin = m.IdMesin
+        AND ISNULL(p.IsComplete, 0) = 0
+        AND (
+          CONVERT(date, p.Tanggal) < c.CurrentDate
+          OR (
+            CONVERT(date, p.Tanggal) = c.CurrentDate
+            AND (
+              (p.HourStart <= p.HourEnd AND c.CurrentTime >= CAST(p.HourEnd AS time(0)))
+              OR (p.HourStart > p.HourEnd AND c.CurrentTime >= CAST(p.HourEnd AS time(0)) AND c.CurrentTime < CAST(p.HourStart AS time(0)))
+            )
+          )
+        )
+      ORDER BY p.Tanggal DESC, p.HourEnd DESC, p.NoProduksi DESC
+    ) pendingProd
     LEFT JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
-      ON mbj.IdBJ = h.OutputJenisId
+      ON mbj.IdBJ = COALESCE(h.OutputJenisId, pendingProd.OutputJenisId)
     LEFT JOIN dbo.MstRegu rg WITH (NOLOCK)
-      ON rg.IdRegu = h.IdRegu
+      ON rg.IdRegu = COALESCE(h.IdRegu, pendingProd.IdRegu)
     OUTER APPLY (SELECT TOP 1 * FROM ActiveShift) s
     CROSS JOIN CurrentCtx c
     WHERE ${whereEnable}
@@ -1589,11 +1806,11 @@ async function getPackingByNoProduksi({
       m.NamaMesin,
       m.Bagian,
       m.IdBagianMesin,
-      h.NoPacking AS NoProduksi,
-      CONVERT(date, h.Tanggal) AS TglProduksi,
-      h.IdRegu,
+      COALESCE(h.NoPacking, pendingProd.NoPacking) AS NoProduksi,
+      CONVERT(date, COALESCE(h.Tanggal, pendingProd.Tanggal)) AS TglProduksi,
+      COALESCE(h.IdRegu, pendingProd.IdRegu) AS IdRegu,
       rg.NamaRegu,
-      h.OutputJenisId,
+      COALESCE(h.OutputJenisId, pendingProd.OutputJenisId) AS OutputJenisId,
       mbj.NamaBJ  AS OutputJenisNama,
       mbj.ItemCode AS OutputJenisItemCode,
       JSON_QUERY(
@@ -1601,7 +1818,7 @@ async function getPackingByNoProduksi({
           (
             SELECT od.IdOperator AS [value]
             FROM dbo.PackingProduksiOperator_d od WITH (NOLOCK)
-            WHERE od.NoPacking = h.NoPacking
+            WHERE od.NoPacking = COALESCE(h.NoPacking, pendingProd.NoPacking)
             ORDER BY od.IdOperator
             FOR JSON PATH
           ),
@@ -1614,20 +1831,25 @@ async function getPackingByNoProduksi({
           FROM dbo.PackingProduksiOperator_d od WITH (NOLOCK)
           INNER JOIN dbo.MstOperator op WITH (NOLOCK)
             ON op.IdOperator = od.IdOperator
-          WHERE od.NoPacking = h.NoPacking
+          WHERE od.NoPacking = COALESCE(h.NoPacking, pendingProd.NoPacking)
         ),
         ''
       ) AS Operators,
-      h.Shift,
-      CONVERT(varchar(8), h.HourStart, 108) AS HourStart,
-      CONVERT(varchar(8), h.HourEnd,   108) AS HourEnd,
+      COALESCE(h.Shift, pendingProd.Shift) AS Shift,
+      CONVERT(varchar(8), COALESCE(h.HourStart, pendingProd.HourStart), 108) AS HourStart,
+      CONVERT(varchar(8), COALESCE(h.HourEnd, pendingProd.HourEnd),   108) AS HourEnd,
       m.Target,
       CONVERT(varchar(10), c.CurrentDate, 23) AS CurrentDate,
       CONVERT(varchar(8), c.CurrentTime, 108) AS CurrentTime,
       s.NoShift AS ActiveShift,
       CONVERT(varchar(8), s.HourStart, 108) AS ActiveShiftHourStart,
       CONVERT(varchar(8), s.HourEnd,   108) AS ActiveShiftHourEnd,
-      s.ValidFrmDate AS ActiveShiftValidFrmDate
+      s.ValidFrmDate AS ActiveShiftValidFrmDate,
+      CASE
+        WHEN pendingProd.NoPacking IS NOT NULL THEN 'pending'
+        WHEN h.NoPacking IS NULL THEN 'idle'
+        ELSE 'aktif'
+      END AS MachineStatus
     FROM dbo.MstMesin m WITH (NOLOCK)
     OUTER APPLY (
       SELECT TOP 1
@@ -1660,10 +1882,36 @@ async function getPackingByNoProduksi({
         )
       ORDER BY pk.HourStart DESC, pk.NoPacking DESC
     ) h
+    OUTER APPLY (
+      -- Produksi incomplete terbaru yang windownya sudah lewat -> mesin "pending"
+      SELECT TOP 1
+        p.NoPacking,
+        p.Tanggal,
+        p.IdRegu,
+        p.OutputJenisId,
+        p.Shift,
+        p.HourStart,
+        p.HourEnd
+      FROM dbo.PackingProduksi_h p WITH (NOLOCK)
+      CROSS JOIN CurrentCtx c
+      WHERE p.IdMesin = m.IdMesin
+        AND ISNULL(p.IsComplete, 0) = 0
+        AND (
+          CONVERT(date, p.Tanggal) < c.CurrentDate
+          OR (
+            CONVERT(date, p.Tanggal) = c.CurrentDate
+            AND (
+              (p.HourStart <= p.HourEnd AND c.CurrentTime >= CAST(p.HourEnd AS time(0)))
+              OR (p.HourStart > p.HourEnd AND c.CurrentTime >= CAST(p.HourEnd AS time(0)) AND c.CurrentTime < CAST(p.HourStart AS time(0)))
+            )
+          )
+        )
+      ORDER BY p.Tanggal DESC, p.HourEnd DESC, p.NoPacking DESC
+    ) pendingProd
     LEFT JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
-      ON mbj.IdBJ = h.OutputJenisId
+      ON mbj.IdBJ = COALESCE(h.OutputJenisId, pendingProd.OutputJenisId)
     LEFT JOIN dbo.MstRegu rg WITH (NOLOCK)
-      ON rg.IdRegu = h.IdRegu
+      ON rg.IdRegu = COALESCE(h.IdRegu, pendingProd.IdRegu)
     OUTER APPLY (SELECT TOP 1 * FROM ActiveShift) s
     CROSS JOIN CurrentCtx c
     WHERE ${whereEnable}

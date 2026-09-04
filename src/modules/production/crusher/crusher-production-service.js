@@ -1,4 +1,7 @@
 const { sql, poolPromise } = require("../../../core/config/db");
+const {
+  assertOutputJenisChangeAllowed,
+} = require("../../../core/utils/output-jenis-guard");
 
 const {
   resolveEffectiveDateForCreate,
@@ -629,6 +632,18 @@ async function createCrusherProduksi(payload, ctx) {
 async function updateCrusherProduksi(noCrusherProduksi, payload, ctx) {
   if (!noCrusherProduksi) throw badReq("noCrusherProduksi wajib");
 
+  // Guard: jenis output header tidak boleh diubah bila produksi sudah
+  // memiliki data input atau output.
+  await assertOutputJenisChangeAllowed({
+    noProduksi: noCrusherProduksi,
+    newOutputJenisId: payload?.outputJenisId,
+    headerTable: "CrusherProduksi_h",
+    headerPk: "NoCrusherProduksi",
+    outputTables: ["CrusherProduksiOutput"],
+    outputPk: "NoCrusherProduksi",
+    fetchInputs,
+  });
+
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
@@ -717,6 +732,11 @@ async function updateCrusherProduksi(noCrusherProduksi, payload, ctx) {
     if (payload.shift !== undefined) {
       sets.push("Shift = @Shift");
       rqUpd.input("Shift", sql.Int, payload.shift);
+    }
+
+    if (payload.outputJenisId !== undefined) {
+      sets.push("OutputJenisId = @OutputJenisId");
+      rqUpd.input("OutputJenisId", sql.Int, payload.outputJenisId ?? null);
     }
 
     if (payload.checkBy1 !== undefined) {

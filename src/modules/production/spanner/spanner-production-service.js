@@ -1,5 +1,11 @@
 // services/spanner-production-service.js
 const { sql, poolPromise } = require("../../../core/config/db");
+const {
+  assertOutputJenisChangeAllowed,
+} = require("../../../core/utils/output-jenis-guard");
+const {
+  deriveProduksiStatus,
+} = require("../../../core/utils/produksi-status");
 
 const {
   resolveEffectiveDateForCreate,
@@ -61,7 +67,8 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
       h.ApproveBy,
       h.HourMeter,
       h.HourStart,
-      h.HourEnd
+      h.HourEnd,
+      ISNULL(h.IsComplete, 0) AS IsComplete
     FROM dbo.Spanner_h h WITH (NOLOCK)
     LEFT JOIN dbo.MstMesin m WITH (NOLOCK)
       ON h.IdMesin = m.IdMesin
@@ -78,7 +85,10 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
   const total = countRes.recordset?.[0]?.Total ?? 0;
 
   const dataRes = await rqData.query(qData);
-  const data = dataRes.recordset || [];
+  const data = (dataRes.recordset || []).map((row) => ({
+    ...row,
+    status: deriveProduksiStatus(row),
+  }));
 
   return { data, total };
 }
@@ -108,7 +118,8 @@ async function getProductionByDate(date) {
       h.ApproveBy,
       h.HourMeter,
       h.HourStart,
-      h.HourEnd
+      h.HourEnd,
+      ISNULL(h.IsComplete, 0) AS IsComplete
     FROM dbo.Spanner_h h WITH (NOLOCK)
     LEFT JOIN dbo.MstMesin m WITH (NOLOCK)
       ON h.IdMesin = m.IdMesin
@@ -122,7 +133,10 @@ async function getProductionByDate(date) {
 
   request.input("date", sql.Date, date);
   const result = await request.query(query);
-  return result.recordset || [];
+  return (result.recordset || []).map((row) => ({
+    ...row,
+    status: deriveProduksiStatus(row),
+  }));
 }
 
 // =====================================================
@@ -338,6 +352,18 @@ async function createSpannerProduksi(payload, ctx) {
 async function updateSpannerProduksi(noProduksi, payload, ctx) {
   if (!noProduksi) throw badReq("noProduksi wajib");
 
+  // Guard: jenis output header tidak boleh diubah bila produksi sudah
+  // memiliki data input atau output.
+  await assertOutputJenisChangeAllowed({
+    noProduksi: noProduksi,
+    newOutputJenisId: payload?.outputJenisId,
+    headerTable: "Spanner_h",
+    headerPk: "NoProduksi",
+    outputTables: ["SpannerOutputLabelFWIP"],
+    outputPk: "NoProduksi",
+    fetchInputs,
+  });
+
   // ===============================
   // Audit context
   // ===============================
@@ -426,6 +452,11 @@ async function updateSpannerProduksi(noProduksi, payload, ctx) {
     if (payload.shift !== undefined) {
       sets.push("Shift = @Shift");
       rqUpd.input("Shift", sql.Int, payload.shift);
+    }
+
+    if (payload.outputJenisId !== undefined) {
+      sets.push("OutputJenisId = @OutputJenisId");
+      rqUpd.input("OutputJenisId", sql.Int, payload.outputJenisId ?? null);
     }
 
     if (payload.jamKerja !== undefined) {
@@ -1355,12 +1386,69 @@ async function splitProduksiTime(selector, payload, ctx) {
   }
 }
 
+async function completeSpannerProduksi(noProduksi, ctx) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const checkRes = await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), no)
+      .query(`
+        SELECT TOP 1 NoProduksi, IsComplete
+        FROM dbo.Spanner_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    if (!checkRes.recordset?.length) {
+      throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+    }
+    if (checkRes.recordset[0].IsComplete) {
+      throw conflict(`Produksi ${no} sudah complete.`);
+    }
+
+    await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), no)
+      .query(`
+        UPDATE dbo.Spanner_h
+        SET IsComplete = 1
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    await tx.commit();
+    return { noProduksi: no, isComplete: true, status: "complete" };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
+  }
+}
+
 module.exports = {
   getAllProduksi,
   getProductionByDate,
   createSpannerProduksi,
   updateSpannerProduksi,
   deleteSpannerProduksi,
+  completeSpannerProduksi,
   fetchInputs,
   fetchOutputs,
   fetchOutputsReject,

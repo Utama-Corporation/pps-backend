@@ -1088,7 +1088,8 @@ exports.getDetail = async (noBongkarSusun) => {
         h.IdJenisPlastik      AS idJenis,
         mw.Nama               AS namaJenis,
         bo.NoSak              AS noSak,
-        d.Berat               AS beratSak
+        d.Berat               AS beratSak,
+        ISNULL(CAST(h.HasBeenPrinted AS int), 0) AS printCount
       FROM BongkarSusunOutputWashing bo
       INNER JOIN Washing_h  h  ON h.NoWashing   = bo.NoWashing
       INNER JOIN MstWashing mw ON mw.IdWashing  = h.IdJenisPlastik
@@ -1153,7 +1154,8 @@ exports.getDetail = async (noBongkarSusun) => {
         'bonggolan'           AS category,
         b.IdBonggolan         AS idJenis,
         mb.NamaBonggolan      AS namaJenis,
-        b.Berat               AS totalBerat
+        b.Berat               AS totalBerat,
+        ISNULL(CAST(b.HasBeenPrinted AS int), 0) AS printCount
       FROM BongkarSusunOutputBonggolan bo
       INNER JOIN dbo.Bonggolan b ON b.NoBonggolan = bo.NoBonggolan
       INNER JOIN dbo.MstBonggolan mb ON mb.IdBonggolan = b.IdBonggolan
@@ -1169,7 +1171,8 @@ exports.getDetail = async (noBongkarSusun) => {
         'crusher'             AS category,
         c.IdCrusher           AS idJenis,
         mc.NamaCrusher        AS namaJenis,
-        c.Berat               AS totalBerat
+        c.Berat               AS totalBerat,
+        ISNULL(CAST(c.HasBeenPrinted AS int), 0) AS printCount
       FROM BongkarSusunOutputCrusher oc
       INNER JOIN dbo.Crusher c ON c.NoCrusher = oc.NoCrusher
       INNER JOIN dbo.MstCrusher mc ON mc.IdCrusher = c.IdCrusher
@@ -1185,7 +1188,8 @@ exports.getDetail = async (noBongkarSusun) => {
         'gilingan'            AS category,
         g.IdGilingan          AS idJenis,
         mg.NamaGilingan       AS namaJenis,
-        ISNULL(g.Berat, 0) AS totalBerat
+        ISNULL(g.Berat, 0) AS totalBerat,
+        ISNULL(CAST(g.HasBeenPrinted AS int), 0) AS printCount
       FROM BongkarSusunOutputGilingan og
       INNER JOIN dbo.Gilingan g ON g.NoGilingan = og.NoGilingan
       INNER JOIN dbo.MstGilingan mg ON mg.IdGilingan = g.IdGilingan
@@ -1201,7 +1205,8 @@ exports.getDetail = async (noBongkarSusun) => {
         'furnitureWip'        AS category,
         f.IdFurnitureWIP      AS idJenis,
         cw.Nama               AS namaJenis,
-        ISNULL(f.Pcs, 0) AS pcs
+        ISNULL(f.Pcs, 0) AS pcs,
+        ISNULL(CAST(f.HasBeenPrinted AS int), 0) AS printCount
       FROM dbo.BongkarSusunOutputFurnitureWIP ofw
       INNER JOIN dbo.FurnitureWIP f ON f.NoFurnitureWIP = ofw.NoFurnitureWIP
       INNER JOIN dbo.MstCabinetWIP cw ON cw.IdCabinetWIP = f.IdFurnitureWIP
@@ -1217,7 +1222,8 @@ exports.getDetail = async (noBongkarSusun) => {
         b.IdBJ                AS idJenis,
         mbj.NamaBJ            AS namaJenis,
         ISNULL(b.Pcs, 0)      AS pcs,
-        ISNULL(b.Berat, 0)    AS berat
+        ISNULL(b.Berat, 0)    AS berat,
+        ISNULL(CAST(b.HasBeenPrinted AS int), 0) AS printCount
       FROM dbo.BongkarSusunOutputBarangjadi obj
       INNER JOIN dbo.BarangJadi b ON b.NoBJ = obj.NoBJ
       INNER JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = b.IdBJ
@@ -1234,7 +1240,8 @@ exports.getDetail = async (noBongkarSusun) => {
         mb.Nama               AS namaJenis,
         bo.NoSak              AS noSak,
         d.Berat               AS beratSak,
-        d.IsPartial           AS isPartial
+        d.IsPartial           AS isPartial,
+        ISNULL(CAST(h.HasBeenPrinted AS int), 0) AS printCount
       FROM BongkarSusunOutputBroker bo
       INNER JOIN dbo.Broker_h h ON h.NoBroker = bo.NoBroker
       INNER JOIN dbo.MstBroker mb ON mb.IdBroker = h.IdJenisPlastik
@@ -1264,7 +1271,8 @@ exports.getDetail = async (noBongkarSusun) => {
         h.IdMixer             AS idJenis,
         mx.Jenis              AS namaJenis,
         om.NoSak              AS noSak,
-        ISNULL(d.Berat, 0) AS beratSak
+        ISNULL(d.Berat, 0) AS beratSak,
+        ISNULL(CAST(h.HasBeenPrinted AS int), 0) AS printCount
       FROM BongkarSusunOutputMixer om
       INNER JOIN dbo.Mixer_h h ON h.NoMixer = om.NoMixer
       INNER JOIN dbo.MstMixer mx ON mx.IdMixer = h.IdMixer
@@ -1301,6 +1309,7 @@ exports.getDetail = async (noBongkarSusun) => {
           density2: row.density2,
           density3: row.density3,
           hasBeenPrinted: row.hasBeenPrinted,
+          printCount: row.hasBeenPrinted ?? 0,
           blok: row.blok,
           idLokasi: row.idLokasi,
           jumlahSak: 0,
@@ -1332,6 +1341,7 @@ exports.getDetail = async (noBongkarSusun) => {
           category: row.category,
           idJenis: row.idJenis,
           namaJenis: row.namaJenis,
+          printCount: row.printCount ?? 0,
           jumlahSak: 0,
           totalBerat: 0,
           saks: [],

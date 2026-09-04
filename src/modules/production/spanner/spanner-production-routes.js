@@ -27,6 +27,12 @@ router.post(
   spannerController.splitProduksiTime,
 );
 
+router.patch(
+  "/spanner/:noProduksi/complete",
+  verifyToken,
+  spannerController.completeProduksi,
+);
+
 router.put(
   "/spanner/:noProduksi",
   verifyToken,

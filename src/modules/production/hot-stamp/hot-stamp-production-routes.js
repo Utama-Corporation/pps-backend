@@ -23,6 +23,12 @@ router.post(
   hotStampingController.splitProduksiTime,
 );
 
+router.patch(
+  "/hot-stamp/:noProduksi/complete",
+  verifyToken,
+  hotStampingController.completeProduksi,
+);
+
 router.put(
   "/hot-stamp/:noProduksi",
   verifyToken,

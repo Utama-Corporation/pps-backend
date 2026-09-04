@@ -25,6 +25,12 @@ router.post(
   packingController.splitProduksiTime,
 );
 
+router.patch(
+  "/packing/:noPacking/complete",
+  verifyToken,
+  packingController.completeProduksi,
+);
+
 router.put(
   "/packing/:noPacking",
   verifyToken,

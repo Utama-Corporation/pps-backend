@@ -1,5 +1,8 @@
 // services/broker-production-service.js
 const { sql, poolPromise } = require("../../../core/config/db");
+const {
+  assertOutputJenisChangeAllowed,
+} = require("../../../core/utils/output-jenis-guard");
 
 const {
   resolveEffectiveDateForCreate,
@@ -1268,6 +1271,18 @@ async function createBrokerProduksi(payload, ctx) {
 async function updateBrokerProduksi(noProduksi, payload, ctx) {
   if (!noProduksi) throw badReq("noProduksi wajib");
 
+  // Guard: jenis output header tidak boleh diubah bila produksi sudah
+  // memiliki data input atau output.
+  await assertOutputJenisChangeAllowed({
+    noProduksi: noProduksi,
+    newOutputJenisId: payload?.outputJenisId,
+    headerTable: "BrokerProduksi_h",
+    headerPk: "NoProduksi",
+    outputTables: ["BrokerProduksiOutput", "BrokerProduksiOutputBonggolan"],
+    outputPk: "NoProduksi",
+    fetchInputs,
+  });
+
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
@@ -1355,6 +1370,11 @@ async function updateBrokerProduksi(noProduksi, payload, ctx) {
     if (payload.shift !== undefined) {
       sets.push("Shift = @Shift");
       rqUpd.input("Shift", sql.Int, payload.shift);
+    }
+
+    if (payload.outputJenisId !== undefined) {
+      sets.push("OutputJenisId = @OutputJenisId");
+      rqUpd.input("OutputJenisId", sql.Int, payload.outputJenisId ?? null);
     }
 
     if (payload.checkBy1 !== undefined) {

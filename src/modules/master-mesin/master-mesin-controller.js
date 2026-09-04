@@ -128,6 +128,7 @@ async function getBroker(req, res) {
       Shift: row.Shift ?? null,
       HourStart: row.HourStart ?? null,
       HourEnd: row.HourEnd ?? null,
+      status: mapMachineStatus(row.MachineStatus),
     }));
 
     return res.status(200).json({
@@ -205,6 +206,7 @@ async function getWashing(req, res) {
       HourStart: row.HourStart ?? null,
       HourEnd: row.HourEnd ?? null,
       IsBlower: row.IsBlower ?? null,
+      status: mapMachineStatus(row.MachineStatus),
     }));
 
     return res.status(200).json({
@@ -302,6 +304,7 @@ async function getCrusher(req, res) {
       Shift: row.Shift ?? null,
       HourStart: row.HourStart ?? null,
       HourEnd: row.HourEnd ?? null,
+      status: mapMachineStatus(row.MachineStatus),
     }));
 
     return res.status(200).json({
@@ -482,6 +485,7 @@ async function getMixer(req, res) {
       Shift: r.Shift ?? null,
       HourStart: r.HourStart ?? null,
       HourEnd: r.HourEnd ?? null,
+      status: mapMachineStatus(r.MachineStatus),
     }));
 
     return res.status(200).json({
@@ -659,6 +663,7 @@ async function getStamping(req, res) {
       Shift: r.Shift ?? null,
       HourStart: r.HourStart ?? null,
       HourEnd: r.HourEnd ?? null,
+      status: mapMachineStatus(r.MachineStatus),
     }));
 
     return res.status(200).json({
@@ -741,6 +746,7 @@ async function getPasangKunci(req, res) {
       Shift: r.Shift ?? null,
       HourStart: r.HourStart ?? null,
       HourEnd: r.HourEnd ?? null,
+      status: mapMachineStatus(r.MachineStatus),
     }));
 
     return res.status(200).json({
@@ -823,6 +829,7 @@ async function getSpanner(req, res) {
       Shift: r.Shift ?? null,
       HourStart: r.HourStart ?? null,
       HourEnd: r.HourEnd ?? null,
+      status: mapMachineStatus(r.MachineStatus),
     }));
 
     return res.status(200).json({
@@ -905,6 +912,7 @@ async function getPacking(req, res) {
       Shift: r.Shift ?? null,
       HourStart: r.HourStart ?? null,
       HourEnd: r.HourEnd ?? null,
+      status: mapMachineStatus(r.MachineStatus),
     }));
 
     return res.status(200).json({

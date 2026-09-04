@@ -778,12 +778,50 @@ async function splitProduksiTime(req, res) {
   }
 }
 
+async function completeProduksi(req, res) {
+  const noPacking = String(req.params.noPacking || "").trim();
+  if (!noPacking) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noPacking wajib" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res
+      .status(401)
+      .json({ success: false, message: "Unauthorized (actorId missing)" });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data = await packingService.completePackingProduksi(noPacking, {
+      actorId,
+      actorUsername,
+      requestId,
+    });
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[packing.completeProduksi]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
 module.exports = {
   getAllProduksi,
   getProduksiByDate,
   createProduksi,
   updateProduksi,
   deleteProduksi,
+  completeProduksi,
   getInputsByNoPacking,
   getOutputsByNoPacking,
   upsertInputsAndPartials,

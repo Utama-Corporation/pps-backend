@@ -1,5 +1,11 @@
 // services/key-fitting-production-service.js
 const { sql, poolPromise } = require("../../../core/config/db");
+const {
+  assertOutputJenisChangeAllowed,
+} = require("../../../core/utils/output-jenis-guard");
+const {
+  deriveProduksiStatus,
+} = require("../../../core/utils/produksi-status");
 
 const {
   resolveEffectiveDateForCreate,
@@ -119,7 +125,9 @@ async function getAllProduksi(
          AND CONVERT(date, h.Tanggal) <= lc.LastClosedDate
         THEN CAST(1 AS bit)
         ELSE CAST(0 AS bit)
-      END AS IsLocked
+      END AS IsLocked,
+
+      ISNULL(h.IsComplete, 0) AS IsComplete
     FROM dbo.PasangKunci_h h WITH (NOLOCK)
     LEFT JOIN dbo.MstMesin m WITH (NOLOCK)
       ON h.IdMesin = m.IdMesin
@@ -146,6 +154,7 @@ async function getAllProduksi(
       typeof row.IdOperators === "string"
         ? JSON.parse(row.IdOperators).map((x) => x.value)
         : (row.IdOperators ?? []),
+    status: deriveProduksiStatus(row),
   }));
 
   return { data, total };
@@ -213,7 +222,9 @@ async function getProductionByDate(date) {
          AND CONVERT(date, h.Tanggal) <= lc.LastClosedDate
         THEN CAST(1 AS bit)
         ELSE CAST(0 AS bit)
-      END AS IsLocked
+      END AS IsLocked,
+
+      ISNULL(h.IsComplete, 0) AS IsComplete
     FROM dbo.PasangKunci_h h WITH (NOLOCK)
     LEFT JOIN dbo.MstMesin m WITH (NOLOCK)
       ON h.IdMesin = m.IdMesin
@@ -234,6 +245,7 @@ async function getProductionByDate(date) {
       typeof row.IdOperators === "string"
         ? JSON.parse(row.IdOperators).map((x) => x.value)
         : (row.IdOperators ?? []),
+    status: deriveProduksiStatus(row),
   }));
 }
 
@@ -448,6 +460,18 @@ async function createKeyFittingProduksi(payload, ctx) {
 // =====================================================
 async function updateKeyFittingProduksi(noProduksi, payload, ctx) {
   if (!noProduksi) throw badReq("noProduksi wajib");
+
+  // Guard: jenis output header tidak boleh diubah bila produksi sudah
+  // memiliki data input atau output.
+  await assertOutputJenisChangeAllowed({
+    noProduksi: noProduksi,
+    newOutputJenisId: body?.outputJenisId,
+    headerTable: "PasangKunci_h",
+    headerPk: "NoProduksi",
+    outputTables: ["PasangKunciOutputLabelFWIP"],
+    outputPk: "NoProduksi",
+    fetchInputs,
+  });
 
   const body = payload && typeof payload === "object" ? payload : {};
 
@@ -1468,12 +1492,69 @@ async function splitProduksiTime(selector, payload, ctx) {
   }
 }
 
+async function completeKeyFittingProduksi(noProduksi, ctx) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const checkRes = await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), no)
+      .query(`
+        SELECT TOP 1 NoProduksi, IsComplete
+        FROM dbo.PasangKunci_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    if (!checkRes.recordset?.length) {
+      throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+    }
+    if (checkRes.recordset[0].IsComplete) {
+      throw conflict(`Produksi ${no} sudah complete.`);
+    }
+
+    await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), no)
+      .query(`
+        UPDATE dbo.PasangKunci_h
+        SET IsComplete = 1
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    await tx.commit();
+    return { noProduksi: no, isComplete: true, status: "complete" };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
+  }
+}
+
 module.exports = {
   getAllProduksi,
   getProductionByDate,
   createKeyFittingProduksi,
   updateKeyFittingProduksi,
   deleteKeyFittingProduksi,
+  completeKeyFittingProduksi,
   fetchInputs,
   fetchOutputs,
   fetchOutputsReject,

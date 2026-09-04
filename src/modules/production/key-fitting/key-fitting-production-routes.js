@@ -26,6 +26,12 @@ router.post(
 );
 
 // routes/key-fitting-production-route.js
+router.patch(
+  "/key-fitting/:noProduksi/complete",
+  verifyToken,
+  keyFittingController.completeProduksi,
+);
+
 router.put(
   "/key-fitting/:noProduksi",
   verifyToken,

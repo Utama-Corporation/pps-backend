@@ -1,5 +1,8 @@
 // services/production-service.js
 const { sql, poolPromise } = require("../../../core/config/db");
+const {
+  assertOutputJenisChangeAllowed,
+} = require("../../../core/utils/output-jenis-guard");
 
 const {
   resolveEffectiveDateForCreate,
@@ -573,6 +576,18 @@ async function createWashingProduksi(payload, ctx) {
 async function updateWashingProduksi(noProduksi, payload, ctx) {
   if (!noProduksi) throw badReq("noProduksi wajib");
 
+  // Guard: jenis output header tidak boleh diubah bila produksi sudah
+  // memiliki data input atau output.
+  await assertOutputJenisChangeAllowed({
+    noProduksi: noProduksi,
+    newOutputJenisId: payload?.outputJenisId,
+    headerTable: "WashingProduksi_h",
+    headerPk: "NoProduksi",
+    outputTables: ["WashingProduksiOutput"],
+    outputPk: "NoProduksi",
+    fetchInputs,
+  });
+
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
@@ -660,6 +675,11 @@ async function updateWashingProduksi(noProduksi, payload, ctx) {
     if (payload.shift !== undefined) {
       sets.push("Shift = @Shift");
       rqUpd.input("Shift", sql.Int, payload.shift);
+    }
+
+    if (payload.outputJenisId !== undefined) {
+      sets.push("OutputJenisId = @OutputJenisId");
+      rqUpd.input("OutputJenisId", sql.Int, payload.outputJenisId ?? null);
     }
 
     if (payload.jamKerja !== undefined) {

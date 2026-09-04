@@ -1159,6 +1159,27 @@ exports.decide = async (noRetur, decision, body = {}, ctx) => {
         WHERE NoRetur=@No
       `);
 
+    // DIGANTI → buat target pengganti OTOMATIS, satu per item retur,
+    // like-for-like: KodeKategori / IdJenis / Pcs mengikuti item retur
+    // asalnya. Tidak ada input target manual dari frontend. Idempoten
+    // (NOT EXISTS) supaya aman kalau logika ini pernah dijalankan ulang.
+    if (decision === "DIGANTI") {
+      await new sql.Request(tx)
+        .input("No", sql.VarChar(50), no)
+        .input("CreateBy", sql.VarChar(50), actorUsername).query(`
+          INSERT INTO dbo.BJReturV3TurnoverTarget_d
+            (NoRetur, IdItem, KodeKategori, IdJenis, Pcs, CreateBy)
+          SELECT it.NoRetur, it.IdItem, it.KodeKategori, it.IdJenis, it.Pcs, @CreateBy
+          FROM dbo.BJReturV3Item_d it
+          WHERE it.NoRetur = @No
+            AND it.Pcs > 0
+            AND NOT EXISTS (
+              SELECT 1 FROM dbo.BJReturV3TurnoverTarget_d t
+              WHERE t.NoRetur = it.NoRetur AND t.IdItem = it.IdItem
+            );
+        `);
+    }
+
     // Otomatis ekspor ke AS_GSU saat keputusan disimpan.
     // Jika retur ini sudah pernah diekspor, akan conflict (rollback).
     const exportResult = await exportToGsuInTx(tx, no, actorUsername, body.remarks);
@@ -1294,6 +1315,23 @@ exports.scanTurnoverAuto = async (noRetur, labelCode, ctx) => {
     if (header.StatusRetur !== "DIGANTI") {
       throw conflict("Scan turnover hanya bisa dilakukan saat StatusRetur=DIGANTI");
     }
+
+    // Safety-net untuk retur DIGANTI lama yang diputuskan sebelum target
+    // pengganti dibuat otomatis: seed like-for-like dari item retur (idempoten).
+    await new sql.Request(tx)
+      .input("No", sql.VarChar(50), no)
+      .input("CreateBy", sql.VarChar(50), actorUsername).query(`
+        INSERT INTO dbo.BJReturV3TurnoverTarget_d
+          (NoRetur, IdItem, KodeKategori, IdJenis, Pcs, CreateBy)
+        SELECT it.NoRetur, it.IdItem, it.KodeKategori, it.IdJenis, it.Pcs, @CreateBy
+        FROM dbo.BJReturV3Item_d it
+        WHERE it.NoRetur = @No
+          AND it.Pcs > 0
+          AND NOT EXISTS (
+            SELECT 1 FROM dbo.BJReturV3TurnoverTarget_d t
+            WHERE t.NoRetur = it.NoRetur AND t.IdItem = it.IdItem
+          );
+    `);
 
     const bjRes = await new sql.Request(tx).input("Code", sql.VarChar(50), code)
       .query(`

@@ -1,6 +1,12 @@
 // services/packing-production-service.js
 const { sql, poolPromise } = require("../../../core/config/db");
 const {
+  assertOutputJenisChangeAllowed,
+} = require("../../../core/utils/output-jenis-guard");
+const {
+  deriveProduksiStatus,
+} = require("../../../core/utils/produksi-status");
+const {
   resolveEffectiveDateForCreate,
   toDateOnly,
   assertNotLocked,
@@ -77,7 +83,8 @@ async function getAllProduksi(
       h.ApproveBy,
       h.HourMeter,
       h.HourStart,
-      h.HourEnd
+      h.HourEnd,
+      ISNULL(h.IsComplete, 0) AS IsComplete
     FROM dbo.PackingProduksi_h h WITH (NOLOCK)
     LEFT JOIN dbo.MstMesin m WITH (NOLOCK) ON h.IdMesin = m.IdMesin
     LEFT JOIN dbo.MstOperator o WITH (NOLOCK) ON h.IdOperator = o.IdOperator
@@ -91,7 +98,10 @@ async function getAllProduksi(
   const total = countRes.recordset?.[0]?.Total ?? 0;
 
   const dataRes = await rqData.query(qData);
-  const data = dataRes.recordset || [];
+  const data = (dataRes.recordset || []).map((row) => ({
+    ...row,
+    status: deriveProduksiStatus(row),
+  }));
 
   return { data, total };
 }
@@ -118,7 +128,8 @@ async function getProduksiByDate(date) {
       h.ApproveBy,
       h.HourMeter,
       h.HourStart,
-      h.HourEnd
+      h.HourEnd,
+      ISNULL(h.IsComplete, 0) AS IsComplete
     FROM [dbo].[PackingProduksi_h] h
     LEFT JOIN [dbo].[MstMesin] m
       ON h.IdMesin = m.IdMesin
@@ -132,7 +143,10 @@ async function getProduksiByDate(date) {
 
   request.input("date", sql.Date, date);
   const result = await request.query(query);
-  return result.recordset;
+  return (result.recordset || []).map((row) => ({
+    ...row,
+    status: deriveProduksiStatus(row),
+  }));
 }
 
 async function createPackingProduksi(payload, ctx) {
@@ -369,6 +383,18 @@ async function createPackingProduksi(payload, ctx) {
 async function updatePackingProduksi(noPacking, payload, ctx = {}) {
   if (!noPacking) throw badReq("noPacking wajib");
 
+  // Guard: jenis output header tidak boleh diubah bila produksi sudah
+  // memiliki data input atau output.
+  await assertOutputJenisChangeAllowed({
+    noProduksi: noPacking,
+    newOutputJenisId: payload?.outputJenisId,
+    headerTable: "PackingProduksi_h",
+    headerPk: "NoPacking",
+    outputTables: ["PackingProduksiOutputLabelBJ"],
+    outputPk: "NoPacking",
+    fetchInputs,
+  });
+
   // ===============================
   // Validasi ctx / audit
   // ===============================
@@ -461,6 +487,11 @@ async function updatePackingProduksi(noPacking, payload, ctx = {}) {
     if (payload.shift !== undefined) {
       sets.push("Shift = @Shift");
       rqUpd.input("Shift", sql.Int, payload.shift);
+    }
+
+    if (payload.outputJenisId !== undefined) {
+      sets.push("OutputJenisId = @OutputJenisId");
+      rqUpd.input("OutputJenisId", sql.Int, payload.outputJenisId ?? null);
     }
 
     if (payload.jamKerja !== undefined) {
@@ -1342,12 +1373,69 @@ async function splitProduksiTime(selector, payload, ctx) {
   }
 }
 
+async function completePackingProduksi(noPacking, ctx) {
+  const no = String(noPacking || "").trim();
+  if (!no) throw badReq("noPacking wajib");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const checkRes = await new sql.Request(tx)
+      .input("NoPacking", sql.VarChar(50), no)
+      .query(`
+        SELECT TOP 1 NoPacking, IsComplete
+        FROM dbo.PackingProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoPacking = @NoPacking;
+      `);
+
+    if (!checkRes.recordset?.length) {
+      throw notFound(`NoPacking tidak ditemukan: ${no}`);
+    }
+    if (checkRes.recordset[0].IsComplete) {
+      throw conflict(`Produksi ${no} sudah complete.`);
+    }
+
+    await new sql.Request(tx)
+      .input("NoPacking", sql.VarChar(50), no)
+      .query(`
+        UPDATE dbo.PackingProduksi_h
+        SET IsComplete = 1
+        WHERE NoPacking = @NoPacking;
+      `);
+
+    await tx.commit();
+    return { noPacking: no, isComplete: true, status: "complete" };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
+  }
+}
+
 module.exports = {
   getAllProduksi,
   getProduksiByDate,
   createPackingProduksi,
   updatePackingProduksi,
   deletePackingProduksi,
+  completePackingProduksi,
   fetchInputs,
   fetchOutputs,
   upsertInputsAndPartials,

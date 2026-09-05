@@ -12,7 +12,7 @@ Backend API untuk **Plastic Production System (PPS)** yang dibangun dengan stack
 - **Real-time:** Socket.IO
 - **Authentication:** JWT
 - **Container:** Docker
-- **CI/CD:** GitHub Actions + Self-hosted Runnerr
+- **CI/CD:** GitHub Actions + Self-hosted Runner
 
 ---
 
